@@ -35,7 +35,9 @@ Usage:
   webmux completion   Generate shell completion script (bash, zsh)
 
 Options:
-  --port N            Set port (default: 5111)
+  --port N            Set port (default: 5111). Falls back to a free port when taken.
+  --prefix NAME       URL prefix this instance registers under (default: project dir basename).
+                      Other webmux instances on this machine will redirect /<NAME> to this port.
   --app               Open dashboard in browser app mode (minimal window)
   --debug             Show debug-level logs
   --version           Show version number
@@ -43,6 +45,7 @@ Options:
 
 Environment:
   PORT             Same as --port (flag takes precedence)
+  WEBMUX_PREFIX    Same as --prefix
 `);
 }
 
@@ -52,6 +55,7 @@ interface ParsedRootArgs {
   port: number;
   debug: boolean;
   app: boolean;
+  prefix: string | null;
   command: RootCommand;
   commandArgs: string[];
 }
@@ -79,6 +83,7 @@ function isRootCommand(value: string): value is NonNullable<RootCommand> {
 
 function isServeRootOption(value: string): boolean {
   return value === "--port"
+    || value === "--prefix"
     || value === "--app"
     || value === "--debug"
     || value === "--help"
@@ -91,6 +96,7 @@ export function parseRootArgs(args: string[]): ParsedRootArgs {
   let port = parseInt(process.env.PORT || "5111", 10);
   let debug = false;
   let app = false;
+  let prefix: string | null = process.env.WEBMUX_PREFIX?.trim() || null;
   let command: RootCommand = null;
   const commandArgs: string[] = [];
 
@@ -113,6 +119,15 @@ export function parseRootArgs(args: string[]): ParsedRootArgs {
         if (Number.isNaN(port)) {
           throw new Error("Error: --port requires a numeric value");
         }
+        index += 1;
+        break;
+      }
+      case "--prefix": {
+        const value = args[index + 1];
+        if (!value) {
+          throw new Error("Error: --prefix requires a value");
+        }
+        prefix = value.trim();
         index += 1;
         break;
       }
@@ -143,6 +158,7 @@ export function parseRootArgs(args: string[]): ParsedRootArgs {
     port,
     debug,
     app,
+    prefix,
     command,
     commandArgs,
   };
@@ -227,7 +243,7 @@ function openAppMode(url: string): void {
 function pipeWithPrefix(
   stream: ReadableStream<Uint8Array>,
   prefix: string,
-  onTrigger?: { text: string; callback: () => void },
+  onTrigger?: { text: string; callback: (line: string) => void },
 ): void {
   const reader = stream.getReader();
   const decoder = new TextDecoder();
@@ -245,7 +261,7 @@ function pipeWithPrefix(
         console.log(`${prefix} ${line}`);
         if (onTrigger && !fired && line.includes(onTrigger.text)) {
           fired = true;
-          onTrigger.callback();
+          onTrigger.callback(line);
         }
       }
     }
@@ -339,6 +355,7 @@ async function main(args: string[] = process.argv.slice(2)): Promise<void> {
     ...process.env,
     PORT: String(parsed.port),
     WEBMUX_PROJECT_DIR: process.cwd(),
+    ...(parsed.prefix ? { WEBMUX_PREFIX: parsed.prefix } : {}),
     ...(parsed.debug ? { WEBMUX_DEBUG: "1" } : {}),
   };
 
@@ -374,7 +391,7 @@ async function main(args: string[] = process.argv.slice(2)): Promise<void> {
     process.exit(1);
   }
 
-  console.log(`Starting webmux on port ${parsed.port}...`);
+  console.log(`Starting webmux on port ${parsed.port} (falls back to a free port if taken)...`);
 
   const be = Bun.spawn(["bun", backendEntry], {
     env: { ...baseEnv, WEBMUX_STATIC_DIR: staticDir },
@@ -386,7 +403,12 @@ async function main(args: string[] = process.argv.slice(2)): Promise<void> {
   if (parsed.app) {
     pipeWithPrefix(be.stdout, "[BE]", {
       text: "Dev Dashboard API running at",
-      callback: () => openAppMode(`http://localhost:${parsed.port}`),
+      callback: (line) => {
+        // Backend logs the actual bound port (which may differ from parsed.port
+        // when the requested port was taken and we fell back to a free one).
+        const match = line.match(/https?:\/\/[^\s]+/);
+        openAppMode(match?.[0] ?? `http://localhost:${parsed.port}`);
+      },
     });
   } else {
     pipeWithPrefix(be.stdout, "[BE]");
