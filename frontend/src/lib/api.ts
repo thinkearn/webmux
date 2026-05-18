@@ -9,6 +9,8 @@ import type {
   AgentsUiWorktreeConversationResponse,
   AppNotification,
   FileUploadResult,
+  PostWorktreeToLinearResponse,
+  PostWorktreeToLinearTarget,
   ProjectWorktreeSnapshot,
   UpsertCustomAgentRequest,
   ValidateCustomAgentResponse,
@@ -57,7 +59,19 @@ function mapWorktree(snapshot: ProjectWorktreeSnapshot): WorktreeInfo {
     linearIssue: snapshot.linearIssue,
     creating: snapshot.creation !== null,
     creationPhase: snapshot.creation?.phase ?? null,
+    source: snapshot.source,
+    oneshot: snapshot.oneshot,
   };
+}
+
+export function postWorktreeToLinear(
+  branch: string,
+  target: PostWorktreeToLinearTarget,
+): Promise<PostWorktreeToLinearResponse> {
+  return api.postWorktreeToLinear({
+    params: { name: branch },
+    body: { target },
+  });
 }
 
 export async function fetchWorktrees(): Promise<WorktreeInfo[]> {

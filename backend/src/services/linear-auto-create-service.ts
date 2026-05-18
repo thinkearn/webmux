@@ -18,29 +18,65 @@ export interface LinearAutoCreateDependencies {
   git: Pick<GitGateway, "listWorktrees">;
   projectRoot: string;
   fetchIssues?: typeof fetchAssignedIssues;
+  /** Optional handler for the `webmux_oneshot` label variant. When omitted, oneshot triggering is skipped. */
+  runOneshotForIssue?: (issueId: string) => Promise<void>;
 }
 
 export interface LinearAutoCreateMonitorOptions {
   intervalDeps?: SerializedIntervalDependencies<unknown>;
 }
 
-/** Issue IDs for which worktrees have been successfully created.
- *  Prevents duplicate creation attempts across poll cycles. */
+/** Issue IDs the poller has already acted on. Prevents duplicate triggers
+ *  (create OR oneshot) across poll cycles. */
 const processedIssueIds = new Set<string>();
 
 const AUTO_CREATE_LABEL = "webmux";
+const AUTO_ONESHOT_LABEL = "webmux_oneshot";
 
-/** Filter issues to only those in Todo state with the "webmux" label that don't already have a worktree. */
+function hasLabel(issue: LinearIssue, name: string): boolean {
+  return issue.labels.some((l) => l.name.toLowerCase() === name);
+}
+
+/** Shared filter: Todo state, the label rule supplied by the caller, not yet
+ *  processed, and no existing worktree on the branch. */
+function filterTriggerableIssues(
+  issues: LinearIssue[],
+  existingBranches: string[],
+  matchesLabelRule: (issue: LinearIssue) => boolean,
+): LinearIssue[] {
+  return issues.filter((issue) => {
+    if (issue.state.name !== "Todo") return false;
+    if (!matchesLabelRule(issue)) return false;
+    if (processedIssueIds.has(issue.id)) return false;
+    return !existingBranches.some((branch) => branchMatchesIssue(branch, issue.branchName));
+  });
+}
+
+/** Filter issues to only those in Todo state with the "webmux" label that don't already
+ *  have a worktree, excluding any tagged with the oneshot variant. */
 export function filterAutoCreateIssues(
   issues: LinearIssue[],
   existingBranches: string[],
 ): LinearIssue[] {
-  return issues.filter((issue) => {
-    if (issue.state.name !== "Todo") return false;
-    if (!issue.labels.some((l) => l.name.toLowerCase() === AUTO_CREATE_LABEL)) return false;
-    if (processedIssueIds.has(issue.id)) return false;
-    return !existingBranches.some((branch) => branchMatchesIssue(branch, issue.branchName));
-  });
+  return filterTriggerableIssues(
+    issues,
+    existingBranches,
+    (issue) => hasLabel(issue, AUTO_CREATE_LABEL) && !hasLabel(issue, AUTO_ONESHOT_LABEL),
+  );
+}
+
+/** Filter issues to only those in Todo state with the "webmux_oneshot" label that don't already
+ *  have a worktree. The "webmux_oneshot" label wins over "webmux" — issues tagged with both
+ *  run via oneshot mode. */
+export function filterAutoOneshotIssues(
+  issues: LinearIssue[],
+  existingBranches: string[],
+): LinearIssue[] {
+  return filterTriggerableIssues(
+    issues,
+    existingBranches,
+    (issue) => hasLabel(issue, AUTO_ONESHOT_LABEL),
+  );
 }
 
 export async function runLinearAutoCreateOnce(deps: LinearAutoCreateDependencies): Promise<void> {
@@ -49,6 +85,23 @@ export async function runLinearAutoCreateOnce(deps: LinearAutoCreateDependencies
   if (!result.ok) {
     log.error(`[linear-auto-create] failed to fetch issues: ${result.error}`);
     return;
+  }
+
+  // Evict dedup entries for issues that are no longer eligible (label removed,
+  // state moved out of Todo, or issue disappeared). Without this the dedup set
+  // would grow forever and removing+re-adding a label couldn't retrigger,
+  // which the README promises.
+  const eligibleIssueIds = new Set(
+    result.data
+      .filter(
+        (issue) =>
+          issue.state.name === "Todo" &&
+          (hasLabel(issue, AUTO_CREATE_LABEL) || hasLabel(issue, AUTO_ONESHOT_LABEL)),
+      )
+      .map((issue) => issue.id),
+  );
+  for (const id of processedIssueIds) {
+    if (!eligibleIssueIds.has(id)) processedIssueIds.delete(id);
   }
 
   const projectRoot = deps.projectRoot;
@@ -60,27 +113,54 @@ export async function runLinearAutoCreateOnce(deps: LinearAutoCreateDependencies
     .filter((entry) => !entry.bare && entry.branch !== null)
     .map((entry) => entry.branch as string);
 
-  const newIssues = filterAutoCreateIssues(result.data, existingBranches);
-  if (newIssues.length === 0) {
+  const oneshotIssues = deps.runOneshotForIssue
+    ? filterAutoOneshotIssues(result.data, existingBranches)
+    : [];
+  const createIssues = filterAutoCreateIssues(result.data, existingBranches);
+
+  if (oneshotIssues.length === 0 && createIssues.length === 0) {
     log.debug(`[linear-auto-create] no new labeled issues (${result.data.length} assigned, ${existingBranches.length} worktrees)`);
     return;
   }
 
-  log.info(`[linear-auto-create] found ${newIssues.length} new issue(s) with "${AUTO_CREATE_LABEL}" label`);
+  if (oneshotIssues.length > 0) {
+    log.info(`[linear-auto-create] found ${oneshotIssues.length} new issue(s) with "${AUTO_ONESHOT_LABEL}" label`);
+    for (const issue of oneshotIssues) {
+      try {
+        log.info(`[linear-auto-create] launching oneshot for ${issue.identifier}: ${issue.title}`);
+        await deps.runOneshotForIssue!(issue.identifier);
+        processedIssueIds.add(issue.id);
+        log.info(`[linear-auto-create] launched oneshot for ${issue.identifier}`);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.error(`[linear-auto-create] failed to launch oneshot for ${issue.identifier}: ${msg}`);
+        // Mark as processed so a permanent failure (e.g. "Branch already exists"
+        // for an out-of-band local branch) doesn't retry every 60s forever.
+        // The label-eviction pass still lets the user retrigger by removing
+        // and re-adding the label after fixing the underlying issue.
+        processedIssueIds.add(issue.id);
+      }
+    }
+  }
 
-  for (const issue of newIssues) {
-    try {
-      log.info(`[linear-auto-create] creating worktree for ${issue.identifier}: ${issue.title}`);
-      await deps.lifecycleService.createWorktree({
-        mode: "new",
-        branch: issue.branchName,
-        prompt: `${issue.title}\n\n${issue.description ?? ""}`.trim(),
-      });
-      processedIssueIds.add(issue.id);
-      log.info(`[linear-auto-create] created worktree for ${issue.identifier}`);
-    } catch (err: unknown) {
-      const msg = err instanceof Error ? err.message : String(err);
-      log.error(`[linear-auto-create] failed to create worktree for ${issue.identifier}: ${msg}`);
+  if (createIssues.length > 0) {
+    log.info(`[linear-auto-create] found ${createIssues.length} new issue(s) with "${AUTO_CREATE_LABEL}" label`);
+    for (const issue of createIssues) {
+      try {
+        log.info(`[linear-auto-create] creating worktree for ${issue.identifier}: ${issue.title}`);
+        await deps.lifecycleService.createWorktree({
+          mode: "new",
+          branch: issue.branchName,
+          prompt: `${issue.title}\n\n${issue.description ?? ""}`.trim(),
+        });
+        processedIssueIds.add(issue.id);
+        log.info(`[linear-auto-create] created worktree for ${issue.identifier}`);
+      } catch (err: unknown) {
+        const msg = err instanceof Error ? err.message : String(err);
+        log.error(`[linear-auto-create] failed to create worktree for ${issue.identifier}: ${msg}`);
+        // See the oneshot branch above — dedup on permanent failures.
+        processedIssueIds.add(issue.id);
+      }
     }
   }
 }

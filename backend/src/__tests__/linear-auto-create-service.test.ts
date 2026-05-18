@@ -3,6 +3,7 @@ import type { CreateLifecycleWorktreeInput } from "../services/lifecycle-service
 import type { FetchIssuesResult, LinearIssue } from "../services/linear-service";
 import {
   filterAutoCreateIssues,
+  filterAutoOneshotIssues,
   LINEAR_AUTO_CREATE_POLL_INTERVAL_MS,
   resetProcessedIssues,
   runLinearAutoCreateOnce,
@@ -67,10 +68,11 @@ function createDeferred<T>(): Deferred<T> {
 }
 
 function createDeps(input: {
-  issues?: LinearIssue[];
+  issues?: LinearIssue[] | (() => LinearIssue[]);
   existingBranches?: string[];
   fetchResult?: FetchIssuesResult;
   onFetch?: (options: { skipCache?: boolean } | undefined) => void;
+  runOneshotForIssue?: (issueId: string) => Promise<void>;
 } = {}): {
   deps: LinearAutoCreateDependencies;
   created: CreateLifecycleWorktreeInput[];
@@ -78,7 +80,7 @@ function createDeps(input: {
 } {
   const created: CreateLifecycleWorktreeInput[] = [];
   const fetchOptions: Array<{ skipCache?: boolean } | undefined> = [];
-  const issues = input.issues ?? [];
+  const issues: LinearIssue[] | (() => LinearIssue[]) = input.issues ?? [];
   const existingBranches = input.existingBranches ?? [];
 
   return {
@@ -110,9 +112,10 @@ function createDeps(input: {
         input.onFetch?.(options);
         return input.fetchResult ?? {
           ok: true,
-          data: issues,
+          data: typeof issues === "function" ? issues() : issues,
         };
       },
+      ...(input.runOneshotForIssue ? { runOneshotForIssue: input.runOneshotForIssue } : {}),
     },
   };
 }
@@ -147,6 +150,43 @@ describe("filterAutoCreateIssues", () => {
     });
 
     expect(filterAutoCreateIssues([issue, inProgress, missingLabel, existing], ["eng-126-existing"])).toEqual([issue]);
+  });
+});
+
+describe("filterAutoOneshotIssues", () => {
+  beforeEach(() => {
+    resetProcessedIssues();
+  });
+
+  it("matches the webmux_oneshot label case-insensitively", () => {
+    const issues = [
+      createIssue({ id: "a", identifier: "ENG-1", branchName: "eng-1", labels: [{ name: "webmux_oneshot", color: "#fff" }] }),
+      createIssue({ id: "b", identifier: "ENG-2", branchName: "eng-2", labels: [{ name: "WEBMUX_ONESHOT", color: "#fff" }] }),
+      createIssue({ id: "c", identifier: "ENG-3", branchName: "eng-3", labels: [{ name: "webmux", color: "#fff" }] }),
+    ];
+    const matches = filterAutoOneshotIssues(issues, []);
+    expect(matches.map((i) => i.identifier)).toEqual(["ENG-1", "ENG-2"]);
+  });
+
+  it("excludes issues that already have a worktree", () => {
+    const issues = [
+      createIssue({
+        id: "a", identifier: "ENG-1", branchName: "eng-1",
+        labels: [{ name: "webmux_oneshot", color: "#fff" }],
+      }),
+    ];
+    expect(filterAutoOneshotIssues(issues, ["eng-1"])).toEqual([]);
+  });
+
+  it("routes issues tagged with both webmux and webmux_oneshot to the oneshot filter only", () => {
+    const issues = [
+      createIssue({
+        id: "a", identifier: "ENG-1", branchName: "eng-1",
+        labels: [{ name: "webmux", color: "#fff" }, { name: "webmux_oneshot", color: "#fff" }],
+      }),
+    ];
+    expect(filterAutoOneshotIssues(issues, []).map((i) => i.identifier)).toEqual(["ENG-1"]);
+    expect(filterAutoCreateIssues(issues, [])).toEqual([]);
   });
 });
 
@@ -188,6 +228,79 @@ describe("runLinearAutoCreateOnce", () => {
     ]);
   });
 
+  it("dedupes permanent createWorktree failures so they don't retry every poll", async () => {
+    const issue = createIssue();
+    let createCalls = 0;
+    const deps: LinearAutoCreateDependencies = {
+      lifecycleService: {
+        async createWorktree(): Promise<{ branch: string; worktreeId: string }> {
+          createCalls += 1;
+          throw new Error("Branch already exists");
+        },
+      },
+      git: { listWorktrees: () => [] },
+      projectRoot: "/repo",
+      fetchIssues: async () => ({ ok: true, data: [issue] }),
+    };
+
+    await runLinearAutoCreateOnce(deps);
+    await runLinearAutoCreateOnce(deps);
+    await runLinearAutoCreateOnce(deps);
+
+    expect(createCalls).toBe(1);
+  });
+
+  it("dedupes permanent oneshot failures so they don't retry every poll", async () => {
+    const issue = createIssue({ labels: [{ name: "webmux_oneshot", color: "#fff" }] });
+    let oneshotCalls = 0;
+    const deps: LinearAutoCreateDependencies = {
+      lifecycleService: {
+        async createWorktree(): Promise<{ branch: string; worktreeId: string }> {
+          throw new Error("should not be called");
+        },
+      },
+      git: { listWorktrees: () => [] },
+      projectRoot: "/repo",
+      fetchIssues: async () => ({ ok: true, data: [issue] }),
+      runOneshotForIssue: async () => {
+        oneshotCalls += 1;
+        throw new Error("server unreachable");
+      },
+    };
+
+    await runLinearAutoCreateOnce(deps);
+    await runLinearAutoCreateOnce(deps);
+    await runLinearAutoCreateOnce(deps);
+
+    expect(oneshotCalls).toBe(1);
+  });
+
+  it("re-creates after the label is removed and re-added", async () => {
+    const labeled = createIssue();
+    const unlabeled = createIssue({ labels: [] });
+    let current: LinearIssue[] = [labeled];
+    // No existing worktrees — so once removed, the branch-existence filter
+    // won't be the thing blocking the second pass. processedIssueIds is.
+    const { deps, created } = createDeps({ issues: () => current });
+
+    await runLinearAutoCreateOnce(deps);
+    expect(created.length).toBe(1);
+
+    // Same issue still labeled → dedup blocks creation.
+    await runLinearAutoCreateOnce(deps);
+    expect(created.length).toBe(1);
+
+    // Label removed → dedup entry evicts on next poll.
+    current = [unlabeled];
+    await runLinearAutoCreateOnce(deps);
+    expect(created.length).toBe(1);
+
+    // Label re-added → dedup is no longer blocking, so we trigger again.
+    current = [labeled];
+    await runLinearAutoCreateOnce(deps);
+    expect(created.length).toBe(2);
+  });
+
   it("does not create worktrees when the Linear fetch fails", async () => {
     const { deps, created, fetchOptions } = createDeps({
       fetchResult: {
@@ -201,6 +314,41 @@ describe("runLinearAutoCreateOnce", () => {
     expect(fetchOptions).toEqual([{ skipCache: true }]);
     expect(created).toEqual([]);
   });
+
+  it("calls runOneshotForIssue for webmux_oneshot-labeled issues and skips webmux create for them", async () => {
+    const oneshotIssue = createIssue({
+      id: "issue-oneshot", identifier: "ENG-200", branchName: "eng-200-oneshot",
+      labels: [{ name: "webmux_oneshot", color: "#fff" }],
+    });
+    const createIssue1 = createIssue({
+      id: "issue-create", identifier: "ENG-201", branchName: "eng-201-create",
+      labels: [{ name: "webmux", color: "#fff" }],
+    });
+    const triggered: string[] = [];
+    const { deps, created } = createDeps({
+      issues: [oneshotIssue, createIssue1],
+      runOneshotForIssue: async (id) => {
+        triggered.push(id);
+      },
+    });
+
+    await runLinearAutoCreateOnce(deps);
+
+    expect(triggered).toEqual(["ENG-200"]);
+    expect(created.map((c) => c.branch)).toEqual(["eng-201-create"]);
+  });
+
+  it("skips webmux_oneshot issues when no runOneshotForIssue dep is provided", async () => {
+    const oneshotIssue = createIssue({
+      id: "issue-oneshot", identifier: "ENG-200", branchName: "eng-200-oneshot",
+      labels: [{ name: "webmux_oneshot", color: "#fff" }],
+    });
+    const { deps, created } = createDeps({ issues: [oneshotIssue] });
+
+    await runLinearAutoCreateOnce(deps);
+
+    expect(created).toEqual([]);
+  });
 });
 
 describe("startLinearAutoCreateMonitor", () => {
@@ -211,14 +359,19 @@ describe("startLinearAutoCreateMonitor", () => {
   it("uses a 60 second poll interval", async () => {
     let scheduledInterval = -1;
     const fetchStarted = createDeferred<void>();
+    let fetchCount = 0;
     const { deps } = createDeps({
-      onFetch: () => fetchStarted.resolve(undefined),
+      onFetch: () => {
+        fetchCount += 1;
+        if (fetchCount === 1) fetchStarted.resolve();
+      },
     });
 
     const stop = startLinearAutoCreateMonitor(deps, {
       intervalDeps: {
-        scheduleEvery: (_handler, intervalMs) => {
+        scheduleEvery: (handler: () => void, intervalMs: number) => {
           scheduledInterval = intervalMs;
+          handler();
           return 1;
         },
         cancelSchedule: () => {},
@@ -229,6 +382,6 @@ describe("startLinearAutoCreateMonitor", () => {
     stop();
 
     expect(scheduledInterval).toBe(LINEAR_AUTO_CREATE_POLL_INTERVAL_MS);
-    expect(scheduledInterval).toBe(60_000);
+    expect(LINEAR_AUTO_CREATE_POLL_INTERVAL_MS).toBe(60_000);
   });
 });
