@@ -165,11 +165,13 @@ async function runOneshotForIssue(issueId: string): Promise<void> {
 /** Safe to call multiple times — the guard prevents duplicate monitors. */
 function startLinearAutoCreate(): void {
   if (stopLinearAutoCreate) return;
+  const watchTeamKeys = config.integrations.linear.watchTeams;
   stopLinearAutoCreate = startLinearAutoCreateMonitor({
     lifecycleService,
     git,
     projectRoot: PROJECT_DIR,
     runOneshotForIssue,
+    ...(watchTeamKeys && watchTeamKeys.length > 0 ? { watchTeamKeys } : {}),
   });
 }
 
@@ -884,6 +886,9 @@ async function apiCreateWorktree(req: Request): Promise<Response> {
   const agents = body.agents;
   const createLinearTicket = body.createLinearTicket === true;
   const linearTitle = body.linearTitle?.trim() ? body.linearTitle.trim() : undefined;
+  // CreateWorktreeRequestSchema already trims, uppercases, and validates the
+  // team key shape — body.linearTeamKey is either a valid key or undefined.
+  const linearTeamKey = body.linearTeamKey;
   const mode = body.mode;
   const selectedAgents = agents
     ? agents
@@ -960,15 +965,22 @@ async function apiCreateWorktree(req: Request): Promise<Response> {
       return errorResponse("Linear ticket title could not be derived from the prompt", 400);
     }
 
-    const teamId = config.integrations.linear.teamId;
-    if (!teamId) {
-      return errorResponse("Linear teamId is not configured", 503);
+    if (!linearTeamKey) {
+      return errorResponse(
+        "Linear team is required to create a ticket. Provide `linearTeamKey` (e.g. \"ENG\").",
+        400,
+      );
+    }
+
+    const teamResult = await fetchTeamByKey(linearTeamKey);
+    if (!teamResult.ok) {
+      return errorResponse(teamResult.error, teamResult.status);
     }
 
     const linearResult = await createLinearIssue({
       title,
       description: resolvedPrompt ?? "",
-      teamId,
+      teamId: teamResult.data.id,
     });
     if (!linearResult.ok) {
       return errorResponse(linearResult.error, 502);
