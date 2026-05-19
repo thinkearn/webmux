@@ -1,16 +1,17 @@
 import * as p from "@clack/prompts";
-import { existsSync, mkdirSync, unlinkSync } from "node:fs";
-import { join } from "node:path";
+import { existsSync, mkdirSync, readFileSync, unlinkSync } from "node:fs";
+import { basename, join } from "node:path";
 import { homedir } from "node:os";
 import { run, getGitRoot, detectProjectName } from "./shared.ts";
 import type { RunResult } from "./shared.ts";
+import { discoverTakenPorts, pickFreePort, readPortFromUnit } from "./install-ports.ts";
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
-type Platform = "linux" | "darwin";
+export type Platform = "linux" | "darwin";
 type Command = [bin: string, args: string[]];
 
-interface ServiceConfig {
+export interface ServiceConfig {
   platform: Platform;
   projectName: string;
   serviceName: string;
@@ -129,9 +130,58 @@ function generateLaunchdPlist(config: ServiceConfig): string {
 `;
 }
 
-function generateServiceFile(config: ServiceConfig): string {
+export function generateServiceFile(config: ServiceConfig): string {
   if (config.platform === "linux") return generateSystemdUnit(config);
   return generateLaunchdPlist(config);
+}
+
+const SYSTEMD_WORKDIR_RE = /^WorkingDirectory=(.+)$/m;
+const LAUNCHD_WORKDIR_RE = /<key>WorkingDirectory<\/key>\s*<string>([^<]+)<\/string>/;
+
+function readWorkingDirFromUnit(filePath: string, platform: Platform): string | null {
+  let text: string;
+  try {
+    text = readFileSync(filePath, "utf8");
+  } catch {
+    return null;
+  }
+  const regex = platform === "linux" ? SYSTEMD_WORKDIR_RE : LAUNCHD_WORKDIR_RE;
+  const match = regex.exec(text);
+  return match ? match[1].trim() : null;
+}
+
+/** Reconstruct a ServiceConfig from an installed unit file. The serviceName
+ *  is taken from the file basename (not re-derived) so a renamed project dir
+ *  doesn't change the launchd Label / systemd unit name that the OS is
+ *  already tracking — only the regenerated *content* (description, paths,
+ *  environment) reflects the current state. Returns null when the file is
+ *  missing required fields. */
+export function parseInstalledServiceConfig(
+  filePath: string,
+  platform: Platform,
+  webmuxPath: string,
+): ServiceConfig | null {
+  const port = readPortFromUnit(filePath);
+  if (port === null) return null;
+
+  const projectDir = readWorkingDirFromUnit(filePath, platform);
+  if (projectDir === null) return null;
+
+  const fileBase = basename(filePath);
+  const serviceName = platform === "linux"
+    ? fileBase.replace(/\.service$/, "")
+    : fileBase.replace(/^com\.webmux\./, "").replace(/\.plist$/, "");
+
+  const projectName = detectProjectName(projectDir);
+
+  return {
+    platform,
+    projectName,
+    serviceName,
+    webmuxPath,
+    projectDir,
+    port,
+  };
 }
 
 // ── Install/uninstall commands ──────────────────────────────────────────────
@@ -168,10 +218,11 @@ function isInstalled(config: ServiceConfig): boolean {
 
 // ── Subcommands ─────────────────────────────────────────────────────────────
 
-async function install(config: ServiceConfig): Promise<void> {
+async function install(config: ServiceConfig, portExplicit: boolean): Promise<void> {
   const filePath = serviceFilePath(config);
+  const alreadyInstalled = isInstalled(config);
 
-  if (isInstalled(config)) {
+  if (alreadyInstalled) {
     const reinstall = await p.confirm({ message: "Service is already installed. Reinstall?" });
     if (p.isCancel(reinstall) || !reinstall) {
       p.log.info("Aborted.");
@@ -182,6 +233,42 @@ async function install(config: ServiceConfig): Promise<void> {
     }
   }
 
+  // Pick the port that will go into the unit file. With an explicit `--port`,
+  // the user wins. On reinstall, reuse the existing unit's port so a re-run
+  // without flags is idempotent. Otherwise scan the live registry + already
+  // installed unit files and find the lowest free port at or above the
+  // requested start, so installing in a second project doesn't silently
+  // collide on 5111.
+  const requestedPort = config.port;
+  let chosenPort = requestedPort;
+  let portNote: string | null = null;
+  let portWarning: string | null = null;
+
+  if (!portExplicit) {
+    const existingPort = alreadyInstalled ? readPortFromUnit(filePath) : null;
+    if (existingPort !== null) {
+      chosenPort = existingPort;
+      if (existingPort !== requestedPort) {
+        portNote = `Reusing port ${existingPort} from the existing service unit (pass --port to override).`;
+      }
+    } else {
+      const taken = discoverTakenPorts({ excludeUnitPath: filePath });
+      chosenPort = pickFreePort(requestedPort, taken);
+      if (chosenPort !== requestedPort) {
+        portNote = `Port ${requestedPort} is already used by another webmux instance — picked ${chosenPort} instead (pass --port to override).`;
+      }
+    }
+  } else {
+    // Explicit `--port` always wins, but the service will fail to bind on
+    // start if something else is already there — surface it now rather than
+    // making the user dig through `journalctl` / `launchctl` logs later.
+    const taken = discoverTakenPorts({ excludeUnitPath: filePath });
+    if (taken.has(requestedPort)) {
+      portWarning = `Port ${requestedPort} is already claimed by another webmux instance. The service will fail to bind on start; omit --port to auto-pick a free port.`;
+    }
+  }
+
+  config = { ...config, port: chosenPort };
   const content = generateServiceFile(config);
   const commands = installCommands(config);
 
@@ -196,6 +283,9 @@ async function install(config: ServiceConfig): Promise<void> {
     ].join("\n"),
     "Install service",
   );
+
+  if (portNote) p.log.info(portNote);
+  if (portWarning) p.log.warn(portWarning);
 
   const ok = await p.confirm({ message: "Proceed?" });
   if (p.isCancel(ok) || !ok) {
@@ -322,6 +412,12 @@ Usage:
   webmux service uninstall   Stop, disable, and remove the service
   webmux service status      Show service status
   webmux service logs        Tail service logs
+
+Options:
+  --port N                   Pin the service to a specific port. When omitted,
+                             a free port is picked automatically by scanning
+                             other webmux instances and installed services
+                             — second-project installs no longer collide on 5111.
 `);
 }
 
@@ -365,6 +461,7 @@ export default async function service(args: string[]): Promise<void> {
   }
 
   let port = parseInt(process.env.PORT || "5111");
+  let portExplicit = false;
   for (let i = 1; i < args.length; i++) {
     if (args[i] === "--port" && args[i + 1]) {
       const parsed = parseInt(args[++i]);
@@ -373,6 +470,7 @@ export default async function service(args: string[]): Promise<void> {
         return;
       }
       port = parsed;
+      portExplicit = true;
     }
   }
 
@@ -390,7 +488,7 @@ export default async function service(args: string[]): Promise<void> {
 
   switch (action) {
     case "install":
-      await install(config);
+      await install(config, portExplicit);
       break;
     case "uninstall":
       await uninstall(config);

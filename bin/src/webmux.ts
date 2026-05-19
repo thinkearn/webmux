@@ -53,6 +53,10 @@ type RootCommand = "serve" | "init" | "service" | "update" | "add" | "oneshot" |
 
 interface ParsedRootArgs {
   port: number;
+  /** True when the port came from the user (--port flag or pre-existing PORT
+   *  env). False means the default 5111 — backend treats that as a hint and
+   *  may walk to the next free port on EADDRINUSE. */
+  portExplicit: boolean;
   debug: boolean;
   app: boolean;
   prefix: string | null;
@@ -94,6 +98,7 @@ function isServeRootOption(value: string): boolean {
 
 export function parseRootArgs(args: string[]): ParsedRootArgs {
   let port = parseInt(process.env.PORT || "5111", 10);
+  let portExplicit = process.env.PORT !== undefined;
   let debug = false;
   let app = false;
   let prefix: string | null = process.env.WEBMUX_PREFIX?.trim() || null;
@@ -119,6 +124,7 @@ export function parseRootArgs(args: string[]): ParsedRootArgs {
         if (Number.isNaN(port)) {
           throw new Error("Error: --port requires a numeric value");
         }
+        portExplicit = true;
         index += 1;
         break;
       }
@@ -156,6 +162,7 @@ export function parseRootArgs(args: string[]): ParsedRootArgs {
 
   return {
     port,
+    portExplicit,
     debug,
     app,
     prefix,
@@ -312,6 +319,26 @@ async function main(args: string[] = process.argv.slice(2)): Promise<void> {
       stderr: "inherit",
     });
     const code = await proc.exited;
+    if (code === 0) {
+      const { listInstalledServices, updateInstalledService } = await import("./service-restart.ts");
+      const services = listInstalledServices();
+      if (services.length > 0) {
+        const whichResult = Bun.spawnSync(["which", "webmux"], { stdout: "pipe", stderr: "pipe" });
+        const webmuxPath = whichResult.success ? whichResult.stdout.toString().trim() : "";
+        console.log(`\nRefreshing ${services.length} installed webmux service(s) to pick up the new version...`);
+        for (const svc of services) {
+          const outcome = await updateInstalledService(svc, webmuxPath);
+          const parts: string[] = [];
+          if (outcome.regenerated) parts.push("regenerated unit");
+          if (outcome.restarted) parts.push("restarted");
+          if (!outcome.regenerated && !outcome.restarted && !outcome.error) parts.push("no change");
+          const status = outcome.error
+            ? `failed — ${outcome.error}`
+            : parts.join(", ");
+          console.log(`  ${svc.name}: ${status}`);
+        }
+      }
+    }
     process.exit(code);
   }
 
@@ -355,6 +382,7 @@ async function main(args: string[] = process.argv.slice(2)): Promise<void> {
     ...process.env,
     PORT: String(parsed.port),
     WEBMUX_PROJECT_DIR: process.cwd(),
+    ...(parsed.portExplicit ? { WEBMUX_PORT_STRICT: "1" } : {}),
     ...(parsed.prefix ? { WEBMUX_PREFIX: parsed.prefix } : {}),
     ...(parsed.debug ? { WEBMUX_DEBUG: "1" } : {}),
   };
@@ -391,7 +419,11 @@ async function main(args: string[] = process.argv.slice(2)): Promise<void> {
     process.exit(1);
   }
 
-  console.log(`Starting webmux on port ${parsed.port} (falls back to a free port if taken)...`);
+  console.log(
+    parsed.portExplicit
+      ? `Starting webmux on port ${parsed.port}...`
+      : `Starting webmux on port ${parsed.port} (falls back to a free port if taken)...`,
+  );
 
   const be = Bun.spawn(["bun", backendEntry], {
     env: { ...baseEnv, WEBMUX_STATIC_DIR: staticDir },

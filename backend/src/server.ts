@@ -1932,15 +1932,45 @@ function actualPort(server: ReturnType<typeof Bun.serve>, requested: number): nu
   return server.port ?? requested;
 }
 
+const MAX_INCREMENTAL_BIND_ATTEMPTS = 100;
+const PORT_STRICT = Bun.env.WEBMUX_PORT_STRICT === "1";
+
+/** Bind the HTTP server.
+ *  - In strict mode (`WEBMUX_PORT_STRICT=1`, set by the CLI when `--port` or
+ *    `PORT` was supplied explicitly): bind exactly `PORT` and fail loudly on
+ *    `EADDRINUSE` — the user pinned that port, surfacing the conflict beats
+ *    silently landing somewhere else.
+ *  - Otherwise (default 5111): walk PORT, PORT+1, … up to a sane cap. Nearby
+ *    ports match the install-time picker and stay easy to spot in `lsof`. If
+ *    the whole window is taken, fall back to an OS-picked ephemeral port so
+ *    the process never crashes on startup. */
 function bindServer(): number {
-  try {
-    return actualPort(startServer(PORT), PORT);
-  } catch (err: unknown) {
-    const code = (err as { code?: string } | null)?.code;
-    if (code !== "EADDRINUSE") throw err;
-    log.info(`[serve] port ${PORT} in use; binding to a free port`);
-    return actualPort(startServer(0), 0);
+  if (PORT_STRICT) {
+    try {
+      return actualPort(startServer(PORT), PORT);
+    } catch (err: unknown) {
+      const code = (err as { code?: string } | null)?.code;
+      if (code === "EADDRINUSE") {
+        log.error(`[serve] port ${PORT} is in use and was set explicitly; drop --port / PORT to let webmux pick a free port`);
+      }
+      throw err;
+    }
   }
+
+  let candidate = PORT;
+  for (let attempt = 0; attempt < MAX_INCREMENTAL_BIND_ATTEMPTS; attempt++) {
+    try {
+      const server = startServer(candidate);
+      if (attempt > 0) log.info(`[serve] port ${PORT} in use; bound to ${actualPort(server, candidate)}`);
+      return actualPort(server, candidate);
+    } catch (err: unknown) {
+      const code = (err as { code?: string } | null)?.code;
+      if (code !== "EADDRINUSE") throw err;
+      candidate += 1;
+    }
+  }
+  log.info(`[serve] ports ${PORT}..${PORT + MAX_INCREMENTAL_BIND_ATTEMPTS - 1} all in use; falling back to an OS-picked port`);
+  return actualPort(startServer(0), 0);
 }
 
 const BOUND_PORT = bindServer();
