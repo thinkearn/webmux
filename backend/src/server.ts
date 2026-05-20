@@ -62,6 +62,7 @@ import {
   attachToIssue,
   branchMatchesIssue,
   buildLinearIssuesResponse,
+  buildLinearPickupMarkdown,
   createIssueComment,
   createLinearIssue,
   deriveLinearIssueTitle,
@@ -177,22 +178,20 @@ function startLinearAutoCreate(): void {
   });
 }
 
-/** Post a "webmux picked this up" comment on the Linear issue so external automation can
- *  see when an issue moves into active work. Failures are logged and swallowed by the
- *  caller — pickup itself must not depend on this. The structured prefix matches the
- *  "done" comment in `buildLinearSummaryMarkdown` so both ends of the lifecycle can be
- *  grepped by external systems. */
+/** Post the structured pickup comment on the Linear issue so external automation can see
+ *  when an issue moves into active work. Failures are logged and swallowed — pickup
+ *  itself must not depend on this. Markdown is built by the pure
+ *  `buildLinearPickupMarkdown` in `linear-service.ts` (next to its `done`-comment
+ *  sibling) so the grep-able prefix has a unit-test contract. */
 async function postLinearPickupComment(
   issue: { id: string; identifier: string; branchName: string },
   kind: "create" | "oneshot",
 ): Promise<void> {
-  const mode = kind === "oneshot" ? "oneshot" : "worktree";
-  const body = [
-    `**Webmux pickup — branch \`${issue.branchName}\`**`,
-    "",
-    `- Mode: ${mode}`,
-    `- Started: ${new Date().toISOString()}`,
-  ].join("\n");
+  const body = buildLinearPickupMarkdown({
+    branch: issue.branchName,
+    kind,
+    pickedUpAt: new Date(),
+  });
   const result = await createIssueComment({ issueId: issue.id, body });
   if (!result.ok) {
     log.warn(`[linear-auto-create] failed to post pickup comment for ${issue.identifier}: ${result.error}`);
