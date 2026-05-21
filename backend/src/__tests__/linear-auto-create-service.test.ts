@@ -72,7 +72,8 @@ function createDeps(input: {
   existingBranches?: string[];
   fetchResult?: FetchIssuesResult;
   onFetch?: (options: { skipCache?: boolean } | undefined) => void;
-  runOneshotForIssue?: (issueId: string) => Promise<void>;
+  runOneshotForIssue?: (issueId: string) => Promise<{ branch: string }>;
+  onOneshotPickedUp?: (input: { issue: LinearIssue; branch: string }) => Promise<void>;
 } = {}): {
   deps: LinearAutoCreateDependencies;
   created: CreateLifecycleWorktreeInput[];
@@ -116,6 +117,7 @@ function createDeps(input: {
         };
       },
       ...(input.runOneshotForIssue ? { runOneshotForIssue: input.runOneshotForIssue } : {}),
+      ...(input.onOneshotPickedUp ? { onOneshotPickedUp: input.onOneshotPickedUp } : {}),
     },
   };
 }
@@ -360,6 +362,7 @@ describe("runLinearAutoCreateOnce", () => {
       issues: [oneshotIssue, createIssue1],
       runOneshotForIssue: async (id) => {
         triggered.push(id);
+        return { branch: "eng-200-oneshot" };
       },
     });
 
@@ -367,6 +370,97 @@ describe("runLinearAutoCreateOnce", () => {
 
     expect(triggered).toEqual(["ENG-200"]);
     expect(created.map((c) => c.branch)).toEqual(["eng-201-create"]);
+  });
+
+  it("does not notify onOneshotPickedUp for the regular `webmux` (create) path", async () => {
+    // Regular pickups are user-driven (the user added the label themselves);
+    // the comment would be noise. Only the autonomous oneshot path gets it.
+    const issue = createIssue();
+    const pickups: string[] = [];
+    const { deps } = createDeps({
+      issues: [issue],
+      onOneshotPickedUp: async ({ issue: picked }) => {
+        pickups.push(picked.identifier);
+      },
+    });
+
+    await runLinearAutoCreateOnce(deps);
+
+    expect(pickups).toEqual([]);
+  });
+
+  it("notifies onOneshotPickedUp with the branch resolved by runOneshotForIssue, not the issue's branchName", async () => {
+    // Regression guard: `buildSeedFromLinear` may resolve to an attachment-payload
+    // or PR branch instead of `issue.branchName`. The pickup-comment contract
+    // requires the *actual* working branch.
+    const oneshotIssue = createIssue({
+      id: "issue-oneshot", identifier: "ENG-200", branchName: "eng-200-original",
+      labels: [{ name: "webmux_oneshot", color: "#fff" }],
+    });
+    const pickups: Array<{ identifier: string; branch: string }> = [];
+    const { deps } = createDeps({
+      issues: [oneshotIssue],
+      runOneshotForIssue: async () => ({ branch: "eng-200-resumed-from-attachment" }),
+      onOneshotPickedUp: async ({ issue: picked, branch }) => {
+        pickups.push({ identifier: picked.identifier, branch });
+      },
+    });
+
+    await runLinearAutoCreateOnce(deps);
+
+    expect(pickups).toEqual([
+      { identifier: "ENG-200", branch: "eng-200-resumed-from-attachment" },
+    ]);
+  });
+
+  it("does not notify onOneshotPickedUp when the oneshot launch itself fails", async () => {
+    const oneshotIssue = createIssue({
+      id: "issue-oneshot", identifier: "ENG-200", branchName: "eng-200-oneshot",
+      labels: [{ name: "webmux_oneshot", color: "#fff" }],
+    });
+    const pickups: string[] = [];
+    const deps: LinearAutoCreateDependencies = {
+      lifecycleService: {
+        async createWorktree(): Promise<{ branch: string; worktreeId: string }> {
+          throw new Error("should not be called");
+        },
+      },
+      git: { listWorktrees: () => [] },
+      projectRoot: "/repo",
+      fetchIssues: async () => ({ ok: true, data: [oneshotIssue] }),
+      runOneshotForIssue: async () => { throw new Error("server unreachable"); },
+      onOneshotPickedUp: async ({ issue: picked }) => {
+        pickups.push(picked.identifier);
+      },
+    };
+
+    await runLinearAutoCreateOnce(deps);
+
+    expect(pickups).toEqual([]);
+  });
+
+  it("swallows onOneshotPickedUp failures so the pickup still completes", async () => {
+    const oneshotIssue = createIssue({
+      id: "issue-oneshot", identifier: "ENG-200", branchName: "eng-200-oneshot",
+      labels: [{ name: "webmux_oneshot", color: "#fff" }],
+    });
+    const oneshotCalls: string[] = [];
+    const { deps } = createDeps({
+      issues: [oneshotIssue],
+      runOneshotForIssue: async (id) => {
+        oneshotCalls.push(id);
+        return { branch: "eng-200-oneshot" };
+      },
+      onOneshotPickedUp: async () => {
+        throw new Error("Linear comment failed");
+      },
+    });
+
+    await runLinearAutoCreateOnce(deps);
+    // Pickup still happened and is deduped on the next pass.
+    await runLinearAutoCreateOnce(deps);
+
+    expect(oneshotCalls).toEqual(["ENG-200"]);
   });
 
   it("skips webmux_oneshot issues when no runOneshotForIssue dep is provided", async () => {

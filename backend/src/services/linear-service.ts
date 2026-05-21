@@ -810,6 +810,22 @@ export interface LinearSummaryInput {
   webmuxVersion?: string;
 }
 
+export interface LinearPickupMarkdownInput {
+  branch: string;
+  pickedUpAt: Date;
+}
+
+/** Build the structured pickup comment posted when the auto-create watcher picks up a
+ *  `webmux_oneshot`-labeled issue. The prefix (`**Webmux pickup — branch ...**`) is the
+ *  contract external automation greps on, so the format is fixed by tests. */
+export function buildLinearPickupMarkdown(input: LinearPickupMarkdownInput): string {
+  return [
+    `**Webmux pickup — branch \`${input.branch}\`**`,
+    "",
+    `- Picked up: ${input.pickedUpAt.toISOString()}`,
+  ].join("\n");
+}
+
 export function buildLinearSummaryMarkdown(input: LinearSummaryInput): string {
   const lines: string[] = [
     `**Webmux session — branch \`${input.branch}\`**`,

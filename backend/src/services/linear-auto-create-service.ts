@@ -18,11 +18,21 @@ export interface LinearAutoCreateDependencies {
   git: Pick<GitGateway, "listWorktrees">;
   projectRoot: string;
   fetchIssues?: typeof fetchAssignedIssues;
-  /** Optional handler for the `webmux_oneshot` label variant. When omitted, oneshot triggering is skipped. */
-  runOneshotForIssue?: (issueId: string) => Promise<void>;
+  /** Optional handler for the `webmux_oneshot` label variant. Must return the actual
+   *  working branch — the oneshot seed may resolve to `attachmentPayload.branch ??
+   *  pr.branch ?? issue.branchName`, which is not always `issue.branchName`. When
+   *  omitted, oneshot triggering is skipped. */
+  runOneshotForIssue?: (issueId: string) => Promise<{ branch: string }>;
   /** Restrict triggering to issues whose team.key is in this list (uppercase).
    *  Undefined or empty → no team filter (all teams). */
   watchTeamKeys?: string[];
+  /** Optional callback invoked after a successful oneshot pickup so external automation
+   *  can be notified. `branch` is the actual working branch (can differ from
+   *  `issue.branchName` — see `runOneshotForIssue`). Failures are logged and
+   *  swallowed — they must not block the pickup itself.
+   *  Only fires for the `webmux_oneshot` path: regular `webmux` pickups are
+   *  user-driven and don't need a Linear-side bookend. */
+  onOneshotPickedUp?: (input: { issue: LinearIssue; branch: string }) => Promise<void>;
 }
 
 export interface LinearAutoCreateMonitorOptions {
@@ -145,9 +155,10 @@ export async function runLinearAutoCreateOnce(deps: LinearAutoCreateDependencies
     for (const issue of oneshotIssues) {
       try {
         log.info(`[linear-auto-create] launching oneshot for ${issue.identifier}: ${issue.title}`);
-        await deps.runOneshotForIssue!(issue.identifier);
+        const { branch } = await deps.runOneshotForIssue!(issue.identifier);
         processedIssueIds.add(issue.id);
-        log.info(`[linear-auto-create] launched oneshot for ${issue.identifier}`);
+        log.info(`[linear-auto-create] launched oneshot for ${issue.identifier} on ${branch}`);
+        await notifyOneshotPickup(deps, issue, branch);
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         log.error(`[linear-auto-create] failed to launch oneshot for ${issue.identifier}: ${msg}`);
@@ -172,6 +183,10 @@ export async function runLinearAutoCreateOnce(deps: LinearAutoCreateDependencies
         });
         processedIssueIds.add(issue.id);
         log.info(`[linear-auto-create] created worktree for ${issue.identifier}`);
+        // No Linear pickup comment for the regular `webmux` path — the user
+        // triggered this themselves by labeling, so the comment would just be
+        // noise. The oneshot bookend (above) is for the autonomous case where
+        // there's no human in the loop.
       } catch (err: unknown) {
         const msg = err instanceof Error ? err.message : String(err);
         log.error(`[linear-auto-create] failed to create worktree for ${issue.identifier}: ${msg}`);
@@ -179,6 +194,20 @@ export async function runLinearAutoCreateOnce(deps: LinearAutoCreateDependencies
         processedIssueIds.add(issue.id);
       }
     }
+  }
+}
+
+async function notifyOneshotPickup(
+  deps: LinearAutoCreateDependencies,
+  issue: LinearIssue,
+  branch: string,
+): Promise<void> {
+  if (!deps.onOneshotPickedUp) return;
+  try {
+    await deps.onOneshotPickedUp({ issue, branch });
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    log.warn(`[linear-auto-create] pickup notification failed for ${issue.identifier}: ${msg}`);
   }
 }
 

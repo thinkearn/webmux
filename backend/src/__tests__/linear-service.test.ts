@@ -361,6 +361,7 @@ describe("Linear issue creation", () => {
 });
 
 import {
+  buildLinearPickupMarkdown,
   buildLinearSummaryMarkdown,
   buildWebmuxAttachmentTitle,
   findLinkedGitHubPr,
@@ -474,6 +475,22 @@ describe("findLinkedGitHubPr", () => {
     });
     expect(result?.url).toBe("https://github.com/org/repo/pull/42");
     expect(result?.state).toBe("unknown");
+  });
+});
+
+describe("buildLinearPickupMarkdown", () => {
+  it("renders the pickup comment verbatim", () => {
+    // Pins the exact wire format because external automation greps the
+    // prefix — changing it silently would break those integrations.
+    const md = buildLinearPickupMarkdown({
+      branch: "eng-200-oneshot",
+      pickedUpAt: new Date("2026-05-20T12:34:56.789Z"),
+    });
+    expect(md).toBe(
+      "**Webmux pickup — branch `eng-200-oneshot`**\n" +
+      "\n" +
+      "- Picked up: 2026-05-20T12:34:56.789Z",
+    );
   });
 });
 
