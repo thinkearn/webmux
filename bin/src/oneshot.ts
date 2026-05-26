@@ -714,17 +714,21 @@ export async function runOneshot(parsed: ParsedOneshotCommand, port: number): Pr
   try {
     // Preflight: the final `postWorktreeToLinear` call runs on the server, so
     // the server's LINEAR_API_KEY must be set. Without this check, the user
-    // could run for hours before discovering the post-back will fail.
+    // could run for hours before discovering the post-back will fail. We fold
+    // this availability check into the autoName fetch since both gate the same
+    // --linear flow and the combined endpoint avoids a second round-trip.
+    let autoName: Awaited<ReturnType<typeof api.fetchAutoNameConfig>>["autoName"] = null;
     if (postToLinearTarget) {
-      const availability = await api.fetchLinearIssues();
-      if (availability.availability === "missing_api_key") {
+      const projectAutoName = await api.fetchAutoNameConfig();
+      if (projectAutoName.linearAvailability === "missing_api_key") {
         stderr(`[${timestamp()}] [error] server has no LINEAR_API_KEY — the post-back to Linear at the end of the run will fail. Set the env var on the webmux server and restart it.`);
         return 1;
       }
-      if (availability.availability === "disabled") {
+      if (projectAutoName.linearAvailability === "disabled") {
         stderr(`[${timestamp()}] [error] Linear integration is disabled on the webmux server.`);
         return 1;
       }
+      autoName = projectAutoName.autoName;
     }
 
     // Resolve Linear in-process (using LINEAR_API_KEY from the CLI shell's env)
@@ -736,7 +740,6 @@ export async function runOneshot(parsed: ParsedOneshotCommand, port: number): Pr
         stderr(`[${timestamp()}] [error] --linear ${postToLinearTarget.teamKey} requires --prompt to derive an issue title`);
         return 1;
       }
-      const { autoName } = await api.fetchAutoNameConfig();
 
       const polished = await polishLinearIssueTitle({ prompt: parsed.prompt, autoName });
       if (!polished) {
@@ -783,6 +786,8 @@ export async function runOneshot(parsed: ParsedOneshotCommand, port: number): Pr
           stdout(`[${timestamp()}] [event] using existing Linear issue ${duplicate.identifier} → ${duplicate.url}`);
           fromLinearIssueId = duplicate.identifier;
           postToLinearTarget = { kind: "issue", issueId: duplicate.identifier };
+        } else {
+          stdout(`[${timestamp()}] [event] user chose to create a new issue despite candidate ${duplicate.identifier}`);
         }
       }
 

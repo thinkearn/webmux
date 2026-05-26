@@ -1380,7 +1380,13 @@ async function apiGetLinearIssues(): Promise<Response> {
 }
 
 function apiGetAutoNameConfig(): Response {
-  return jsonResponse({ autoName: config.autoName });
+  const apiKey = Bun.env.LINEAR_API_KEY;
+  const linearAvailability = !config.integrations.linear.enabled
+    ? "disabled"
+    : !apiKey?.trim()
+      ? "missing_api_key"
+      : "ready";
+  return jsonResponse({ autoName: config.autoName, linearAvailability });
 }
 
 const MAX_DIFF_BYTES = 200 * 1024;

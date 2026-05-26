@@ -311,6 +311,7 @@ export const AutoNameConfigResponseSchema = z.object({
     model: z.string().optional(),
     systemPrompt: z.string().optional(),
   }).nullable(),
+  linearAvailability: LinearIssueAvailabilitySchema,
 });
 
 export const WorktreeCreationStateSchema = z.object({

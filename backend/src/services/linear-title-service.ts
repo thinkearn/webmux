@@ -6,7 +6,7 @@ import { searchTeamIssuesByKeywords, type LinearIssue } from "./linear-service";
 const TITLE_TIMEOUT_MS = 15_000;
 const DEDUP_TIMEOUT_MS = 15_000;
 const MAX_TITLE_LENGTH = 80;
-const MAX_DEDUP_CANDIDATES = 10;
+const MAX_DEDUP_CANDIDATES = 20;
 
 const POLISH_SYSTEM_PROMPT = [
   "You convert a developer task description into a concise Linear issue title.",
@@ -209,8 +209,9 @@ function buildDedupUserPrompt(input: {
     .map((c) => `${c.identifier}: ${c.title}`)
     .join("\n");
   const fullPrompt = input.prompt.trim();
-  const excerpt = fullPrompt.length > MAX_DEDUP_PROMPT_EXCERPT
-    ? `${fullPrompt.slice(0, MAX_DEDUP_PROMPT_EXCERPT)}…`
+  const codePoints = [...fullPrompt];
+  const excerpt = codePoints.length > MAX_DEDUP_PROMPT_EXCERPT
+    ? `${codePoints.slice(0, MAX_DEDUP_PROMPT_EXCERPT).join("")}…`
     : fullPrompt;
   const lines = [`New task title: ${input.polishedTitle}`];
   if (excerpt && excerpt !== input.polishedTitle) {

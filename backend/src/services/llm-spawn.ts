@@ -29,7 +29,8 @@ export async function defaultLlmSpawn(args: string[], options: SpawnOptions = {}
     proc.exited,
   ]).then(([stdout, stderr, exitCode]) => ({ exitCode, stdout, stderr }));
 
-  if (options.timeoutMs === undefined) {
+  const timeoutMs = options.timeoutMs;
+  if (timeoutMs === undefined) {
     return await resultPromise;
   }
 
@@ -41,8 +42,8 @@ export async function defaultLlmSpawn(args: string[], options: SpawnOptions = {}
       try {
         proc.kill("SIGKILL");
       } catch {}
-      reject(new LlmSpawnTimeoutError(options.timeoutMs!));
-    }, options.timeoutMs);
+      reject(new LlmSpawnTimeoutError(timeoutMs));
+    }, timeoutMs);
 
     void resultPromise.then((result) => {
       if (settled) return;
