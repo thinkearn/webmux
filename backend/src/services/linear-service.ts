@@ -589,7 +589,7 @@ const TEAM_BY_KEY_QUERY = `
 `;
 
 const TEAM_ISSUES_BY_KEYWORDS_QUERY = `
-  query TeamIssuesByKeywords($teamId: String!, $titleFilters: [IssueFilter!]!, $first: Int!) {
+  query TeamIssuesByKeywords($teamId: ID!, $titleFilters: [IssueFilter!]!, $first: Int!) {
     issues(
       filter: {
         team: { id: { eq: $teamId } }
