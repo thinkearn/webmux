@@ -47,7 +47,8 @@ function heuristicTitle(prompt: string): string | null {
     .map((line) => line.trim())
     .find((line) => line.length > 0);
   if (!firstLine) return null;
-  return firstLine.length > 100 ? `${firstLine.slice(0, 97)}…` : firstLine;
+  if (firstLine.length <= MAX_TITLE_LENGTH) return firstLine;
+  return `${firstLine.slice(0, MAX_TITLE_LENGTH - 1).trimEnd()}…`;
 }
 
 function normalizePolishedTitle(raw: string): string | null {
@@ -160,7 +161,11 @@ export async function findDuplicateLinearIssue(
   const candidates = searchResult.data;
   if (candidates.length === 0) return null;
 
-  const userPrompt = buildDedupUserPrompt(input.polishedTitle, candidates);
+  const userPrompt = buildDedupUserPrompt({
+    polishedTitle: input.polishedTitle,
+    prompt: input.prompt,
+    candidates,
+  });
   const runLlm = input.runLlm ?? runShortLlmTask;
 
   let result: RunLlmResult;
@@ -193,25 +198,39 @@ export async function findDuplicateLinearIssue(
   return parseDedupResponse(result.stdout, candidates);
 }
 
-function buildDedupUserPrompt(polishedTitle: string, candidates: LinearIssue[]): string {
-  const list = candidates
+const MAX_DEDUP_PROMPT_EXCERPT = 1000;
+
+function buildDedupUserPrompt(input: {
+  polishedTitle: string;
+  prompt: string;
+  candidates: LinearIssue[];
+}): string {
+  const list = input.candidates
     .map((c) => `${c.identifier}: ${c.title}`)
     .join("\n");
-  return [
-    `New task title: ${polishedTitle}`,
+  const fullPrompt = input.prompt.trim();
+  const excerpt = fullPrompt.length > MAX_DEDUP_PROMPT_EXCERPT
+    ? `${fullPrompt.slice(0, MAX_DEDUP_PROMPT_EXCERPT)}…`
+    : fullPrompt;
+  const lines = [`New task title: ${input.polishedTitle}`];
+  if (excerpt && excerpt !== input.polishedTitle) {
+    lines.push("", "Full task description:", excerpt);
+  }
+  lines.push(
     "",
     "Existing issues:",
     list,
     "",
     "Return the identifier of the matching issue, or NONE.",
-  ].join("\n");
+  );
+  return lines.join("\n");
 }
 
 function parseDedupResponse(stdout: string, candidates: LinearIssue[]): LinearIssue | null {
   const trimmed = stdout.trim();
   if (!trimmed) return null;
-  const firstLine = trimmed.split(/\r?\n/)[0]?.trim() ?? "";
-  const cleaned = firstLine.replace(/[^A-Z0-9-]/gi, "").toUpperCase();
-  if (!cleaned || cleaned === "NONE") return null;
-  return candidates.find((c) => c.identifier.toUpperCase() === cleaned) ?? null;
+  const match = trimmed.match(/\b([A-Z]+-\d+)\b/i);
+  if (!match) return null;
+  const identifier = match[1].toUpperCase();
+  return candidates.find((c) => c.identifier.toUpperCase() === identifier) ?? null;
 }

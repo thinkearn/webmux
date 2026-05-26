@@ -44,6 +44,13 @@ describe("polishLinearIssueTitle", () => {
     expect(result).toEqual({ title: "Fix login bug", source: "heuristic_no_config" });
   });
 
+  it("heuristic title is capped at the same 80-char ceiling as the LLM title", async () => {
+    const long = "Fix the very very very very very very very very very very very very long title that keeps going";
+    const result = await polishLinearIssueTitle({ prompt: long, autoName: null });
+    expect(result?.title.length).toBeLessThanOrEqual(80);
+    expect(result?.title.endsWith("…")).toBe(true);
+  });
+
   it("returns null when prompt is empty", async () => {
     const result = await polishLinearIssueTitle({ prompt: "   \n  ", autoName: null });
     expect(result).toBeNull();
@@ -158,6 +165,58 @@ describe("findDuplicateLinearIssue", () => {
       runLlm: async () => okLlm("ENG-1"),
     });
     expect(result).toBeNull();
+  });
+
+  it("extracts identifier from chatty LLM output", async () => {
+    const candidates = [
+      makeIssue({ identifier: "ENG-2", title: "Logout drops session on refresh" }),
+    ];
+    for (const chatty of [
+      "Answer: ENG-2",
+      "ENG-2 - this matches the new task",
+      "  ENG-2  ",
+      "The matching issue is ENG-2 because both describe the same logout bug.",
+    ]) {
+      const result = await findDuplicateLinearIssue({
+        ...baseInput,
+        search: async () => ({ ok: true, data: candidates }) satisfies SearchTeamIssuesResult,
+        runLlm: async () => okLlm(chatty),
+      });
+      expect(result?.identifier, `chatty=${chatty}`).toBe("ENG-2");
+    }
+  });
+
+  it("includes the full prompt as additional context in the dedup user prompt", async () => {
+    const candidates = [makeIssue({ identifier: "ENG-1", title: "Something" })];
+    const seenUserPrompts: string[] = [];
+    await findDuplicateLinearIssue({
+      ...baseInput,
+      polishedTitle: "Fix logout",
+      prompt: "Fix logout when token refresh races. Repro: open in two tabs.",
+      search: async () => ({ ok: true, data: candidates }) satisfies SearchTeamIssuesResult,
+      runLlm: async (_config, _system, user) => {
+        seenUserPrompts.push(user);
+        return okLlm("NONE");
+      },
+    });
+    expect(seenUserPrompts[0]).toContain("Fix logout when token refresh races");
+    expect(seenUserPrompts[0]).toContain("Full task description:");
+  });
+
+  it("omits the full-prompt block when prompt and polished title are identical", async () => {
+    const candidates = [makeIssue({ identifier: "ENG-1", title: "Something" })];
+    const seenUserPrompts: string[] = [];
+    await findDuplicateLinearIssue({
+      ...baseInput,
+      polishedTitle: "Fix logout",
+      prompt: "Fix logout",
+      search: async () => ({ ok: true, data: candidates }) satisfies SearchTeamIssuesResult,
+      runLlm: async (_config, _system, user) => {
+        seenUserPrompts.push(user);
+        return okLlm("NONE");
+      },
+    });
+    expect(seenUserPrompts[0]).not.toContain("Full task description:");
   });
 
   it("returns the matching candidate when the LLM picks an identifier", async () => {
