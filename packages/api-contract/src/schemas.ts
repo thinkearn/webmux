@@ -303,6 +303,16 @@ export const LinearIssuesResponseSchema = z.object({
   issues: z.array(LinearIssueSchema),
 });
 
+export const AutoNameProviderSchema = z.enum(["claude", "codex"]);
+
+export const AutoNameConfigResponseSchema = z.object({
+  autoName: z.object({
+    provider: AutoNameProviderSchema,
+    model: z.string().optional(),
+    systemPrompt: z.string().optional(),
+  }).nullable(),
+});
+
 export const WorktreeCreationStateSchema = z.object({
   phase: WorktreeCreationPhaseSchema,
 });
@@ -587,6 +597,7 @@ export type LinkedLinearIssue = z.infer<typeof LinkedLinearIssueSchema>;
 export type LinearIssue = z.infer<typeof LinearIssueSchema>;
 export type LinearIssueAvailability = z.infer<typeof LinearIssueAvailabilitySchema>;
 export type LinearIssuesResponse = z.infer<typeof LinearIssuesResponseSchema>;
+export type AutoNameConfigResponse = z.infer<typeof AutoNameConfigResponseSchema>;
 export type WorktreeCreationState = z.infer<typeof WorktreeCreationStateSchema>;
 export type AppNotification = z.infer<typeof AppNotificationSchema>;
 export type ProjectWorktreeSnapshot = z.infer<typeof ProjectWorktreeSnapshotSchema>;

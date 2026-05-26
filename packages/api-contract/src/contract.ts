@@ -37,6 +37,7 @@ import {
   WorktreeNameParamsSchema,
   NotificationIdParamsSchema,
   LinearIssuesResponseSchema,
+  AutoNameConfigResponseSchema,
   InstancesResponseSchema,
 } from "./schemas";
 
@@ -70,6 +71,7 @@ export const apiPaths = {
   mergeWorktree: "/api/worktrees/:name/merge",
   fetchWorktreeDiff: "/api/worktrees/:name/diff",
   fetchLinearIssues: "/api/linear/issues",
+  fetchAutoNameConfig: "/api/project/auto-name",
   setLinearAutoCreate: "/api/linear/auto-create",
   setAutoRemoveOnMerge: "/api/github/auto-remove-on-merge",
   pullMain: "/api/pull-main",
@@ -338,6 +340,14 @@ export const apiContract = c.router({
       200: LinearIssuesResponseSchema,
       500: ErrorResponseSchema,
       502: ErrorResponseSchema,
+    },
+  },
+  fetchAutoNameConfig: {
+    method: "GET",
+    path: apiPaths.fetchAutoNameConfig,
+    responses: {
+      200: AutoNameConfigResponseSchema,
+      500: ErrorResponseSchema,
     },
   },
   setLinearAutoCreate: {

@@ -1379,6 +1379,10 @@ async function apiGetLinearIssues(): Promise<Response> {
   return jsonResponse(result.data);
 }
 
+function apiGetAutoNameConfig(): Response {
+  return jsonResponse({ autoName: config.autoName });
+}
+
 const MAX_DIFF_BYTES = 200 * 1024;
 
 async function apiGetWorktreeDiff(name: string): Promise<Response> {
@@ -1747,6 +1751,10 @@ function startServer(port: number): ReturnType<typeof Bun.serve> {
 
     [apiPaths.fetchLinearIssues]: {
       GET: () => catching("GET /api/linear/issues", () => apiGetLinearIssues()),
+    },
+
+    [apiPaths.fetchAutoNameConfig]: {
+      GET: () => catching("GET /api/project/auto-name", async () => apiGetAutoNameConfig()),
     },
 
     [apiPaths.setLinearAutoCreate]: {
