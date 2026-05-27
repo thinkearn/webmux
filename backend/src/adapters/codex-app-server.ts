@@ -26,9 +26,10 @@ export interface CodexAppServerUserMessageItem {
 export interface CodexAppServerAgentMessageItem {
   type: "agentMessage";
   id: string;
-  text: string;
-  phase: string;
-  memoryCitation: unknown;
+  text?: string;
+  message?: string;
+  phase?: string;
+  memoryCitation?: unknown;
 }
 
 export interface CodexAppServerGenericItem {
@@ -184,16 +185,11 @@ const CodexAppServerUserMessageItemSchema: z.ZodType<CodexAppServerUserMessageIt
 const CodexAppServerAgentMessageItemSchema: z.ZodType<CodexAppServerAgentMessageItem, z.ZodTypeDef, unknown> = z.object({
   type: z.literal("agentMessage"),
   id: z.string(),
-  text: z.string(),
-  phase: z.string(),
-  memoryCitation: UnknownValueSchema,
-}).transform((value) => ({
-  type: value.type,
-  id: value.id,
-  text: value.text,
-  phase: value.phase,
-  memoryCitation: value.memoryCitation,
-}));
+  text: z.string().optional(),
+  message: z.string().optional(),
+  phase: z.string().optional(),
+  memoryCitation: UnknownValueSchema.optional(),
+});
 const CodexAppServerGenericItemSchema: z.ZodType<CodexAppServerGenericItem, z.ZodTypeDef, unknown> = z.object({
   type: z.string(),
   id: z.string(),
