@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
+  AgentsUiConversationEvent,
   AgentsUiSendMessageResponse,
   AgentsUiWorktreeConversationResponse,
   WorktreeInfo,
@@ -168,36 +169,14 @@ describe("MobileChatSurface", () => {
     await screen.findByText("Done.");
   });
 
-  it("keeps polling Codex history when the first refresh is still stale", async () => {
+  it("does not poll Codex history after sending when the websocket stream is active", async () => {
     vi.mocked(attachWorktreeConversation).mockResolvedValue(createConversationResponse("codexAppServer"));
     vi.mocked(sendWorktreeConversationMessage).mockResolvedValue({
       conversationId: "thread-1",
       turnId: "turn-1",
       running: true,
     } satisfies AgentsUiSendMessageResponse);
-    vi.mocked(fetchWorktreeConversationHistory)
-      .mockResolvedValueOnce(createConversationResponse("codexAppServer"))
-      .mockResolvedValueOnce(createConversationResponse("codexAppServer", {
-        running: false,
-        messages: [
-          {
-            id: "user-1",
-            turnId: "turn-1",
-            role: "user",
-            text: "Ship it",
-            status: "completed",
-            createdAt: "2026-04-15T12:00:00.000Z",
-          },
-          {
-            id: "assistant-1",
-            turnId: "turn-1",
-            role: "assistant",
-            text: "Done.",
-            status: "completed",
-            createdAt: "2026-04-15T12:00:01.000Z",
-          },
-        ],
-      }));
+    vi.mocked(fetchWorktreeConversationHistory).mockResolvedValue(createConversationResponse("codexAppServer"));
 
     render(MobileChatSurface, {
       props: {
@@ -219,16 +198,101 @@ describe("MobileChatSurface", () => {
       );
     });
 
-    await vi.advanceTimersByTimeAsync(1000);
-    await waitFor(() => {
-      expect(fetchWorktreeConversationHistory).toHaveBeenCalledTimes(1);
+    await screen.findByText("Ship it");
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(fetchWorktreeConversationHistory).not.toHaveBeenCalled();
+  });
+
+  it("does not duplicate optimistic Codex user messages when the stream upserts the real user item", async () => {
+    vi.mocked(attachWorktreeConversation).mockResolvedValue(createConversationResponse("codexAppServer"));
+    vi.mocked(sendWorktreeConversationMessage).mockResolvedValue({
+      conversationId: "thread-1",
+      turnId: "turn-1",
+      running: true,
+    } satisfies AgentsUiSendMessageResponse);
+
+    render(MobileChatSurface, {
+      props: {
+        worktree: createWorktree({ agentName: "codex" }),
+      },
     });
 
-    await vi.advanceTimersByTimeAsync(1000);
-    await waitFor(() => {
-      expect(fetchWorktreeConversationHistory).toHaveBeenCalledTimes(2);
+    await screen.findByText("No messages yet. Send the first prompt to start this chat.");
+
+    await fireEvent.input(screen.getByLabelText("Message"), {
+      target: { value: "Ship it" },
     });
-    await screen.findByText("Done.");
+    await fireEvent.click(screen.getByRole("button", { name: "Send" }));
+
+    await waitFor(() => {
+      expect(connectWorktreeConversationStream).toHaveBeenCalledWith(
+        "feature/mobile-chat",
+        expect.any(Object),
+      );
+    });
+
+    const callbacks = vi.mocked(connectWorktreeConversationStream).mock.calls[0]?.[1];
+    callbacks?.onEvent({
+      type: "messageUpsert",
+      revision: 1,
+      conversationId: "thread-1",
+      message: {
+        id: "user-1",
+        turnId: "turn-1",
+        role: "user",
+        kind: "text",
+        text: "Ship it",
+        status: "completed",
+        createdAt: "2026-05-28T10:00:00.000Z",
+      },
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText("Ship it")).toHaveLength(1);
+    });
+  });
+
+  it("ignores stale Codex stream revisions", async () => {
+    vi.mocked(attachWorktreeConversation).mockResolvedValue(createConversationResponse("codexAppServer"));
+
+    render(MobileChatSurface, {
+      props: {
+        worktree: createWorktree({ agentName: "codex", agentLabel: "Codex" }),
+      },
+    });
+
+    await waitFor(() => {
+      expect(connectWorktreeConversationStream).toHaveBeenCalledWith(
+        "feature/mobile-chat",
+        expect.any(Object),
+      );
+    });
+
+    const callbacks = vi.mocked(connectWorktreeConversationStream).mock.calls[0]?.[1];
+    const deltaEvent: AgentsUiConversationEvent = {
+      type: "messageDelta",
+      revision: 1,
+      conversationId: "thread-1",
+      turnId: "turn-1",
+      itemId: "assistant-1",
+      delta: "Streaming status update",
+    };
+    callbacks?.onEvent(deltaEvent);
+    await screen.findByText("Streaming status update");
+
+    const snapshotEvent: AgentsUiConversationEvent = {
+      type: "snapshot",
+      revision: 1,
+      data: createConversationResponse("codexAppServer", {
+        running: false,
+        activeTurnId: null,
+        messages: [],
+      }),
+    };
+    callbacks?.onEvent(snapshotEvent);
+
+    await screen.findByText("Streaming status update");
+    expect(screen.queryByText("typing")).not.toBeInTheDocument();
   });
 
   it("keeps polling beyond two minutes until a quiet conversation finally changes", async () => {

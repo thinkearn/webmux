@@ -32,6 +32,24 @@ export interface CodexAppServerAgentMessageItem {
   memoryCitation?: unknown;
 }
 
+export interface CodexAppServerCommandAction {
+  type: string;
+  command?: string;
+  path?: string | null;
+}
+
+export interface CodexAppServerCommandExecutionItem {
+  type: "commandExecution";
+  id: string;
+  command: string;
+  cwd: string | null;
+  status: string;
+  commandActions: CodexAppServerCommandAction[];
+  aggregatedOutput: string | null;
+  exitCode: number | null;
+  durationMs: number | null;
+}
+
 export interface CodexAppServerGenericItem {
   type: string;
   id: string;
@@ -40,6 +58,7 @@ export interface CodexAppServerGenericItem {
 export type CodexAppServerThreadItem =
   | CodexAppServerUserMessageItem
   | CodexAppServerAgentMessageItem
+  | CodexAppServerCommandExecutionItem
   | CodexAppServerGenericItem;
 
 export interface CodexAppServerTurn {
@@ -190,6 +209,22 @@ const CodexAppServerAgentMessageItemSchema: z.ZodType<CodexAppServerAgentMessage
   phase: z.string().optional(),
   memoryCitation: UnknownValueSchema.optional(),
 });
+const CodexAppServerCommandActionSchema: z.ZodType<CodexAppServerCommandAction, z.ZodTypeDef, unknown> = z.object({
+  type: z.string(),
+  command: z.string().optional(),
+  path: z.string().nullable().optional(),
+});
+const CodexAppServerCommandExecutionItemSchema: z.ZodType<CodexAppServerCommandExecutionItem, z.ZodTypeDef, unknown> = z.object({
+  type: z.literal("commandExecution"),
+  id: z.string(),
+  command: z.string(),
+  cwd: z.string().nullable(),
+  status: z.string(),
+  commandActions: z.array(CodexAppServerCommandActionSchema).default([]),
+  aggregatedOutput: z.string().nullable(),
+  exitCode: z.number().nullable(),
+  durationMs: z.number().nullable(),
+});
 const CodexAppServerGenericItemSchema: z.ZodType<CodexAppServerGenericItem, z.ZodTypeDef, unknown> = z.object({
   type: z.string(),
   id: z.string(),
@@ -197,6 +232,7 @@ const CodexAppServerGenericItemSchema: z.ZodType<CodexAppServerGenericItem, z.Zo
 const CodexAppServerThreadItemSchema: z.ZodType<CodexAppServerThreadItem, z.ZodTypeDef, unknown> = z.union([
   CodexAppServerUserMessageItemSchema,
   CodexAppServerAgentMessageItemSchema,
+  CodexAppServerCommandExecutionItemSchema,
   CodexAppServerGenericItemSchema,
 ]);
 const CodexAppServerTurnSchema: z.ZodType<CodexAppServerTurn, z.ZodTypeDef, unknown> = z.object({
@@ -287,6 +323,41 @@ const CodexAppServerInitializeResponseSchema = z.object({
   platformOs: z.string(),
 });
 
+export function readCodexAppServerStdoutLines(input: {
+  decoder: TextDecoder;
+  buffer: string;
+  chunk?: Uint8Array;
+}): {
+  buffer: string;
+  lines: string[];
+} {
+  let buffer = input.buffer + (
+    input.chunk ? input.decoder.decode(input.chunk, { stream: true }) : input.decoder.decode()
+  );
+  const lines: string[] = [];
+
+  while (true) {
+    const newlineIndex = buffer.indexOf("\n");
+    if (newlineIndex === -1) break;
+    const line = buffer.slice(0, newlineIndex).trim();
+    buffer = buffer.slice(newlineIndex + 1);
+    if (line.length > 0) lines.push(line);
+  }
+
+  if (!input.chunk) {
+    const finalLine = buffer.trim();
+    buffer = "";
+    if (finalLine.length > 0) lines.push(finalLine);
+  }
+
+  return { buffer, lines };
+}
+
+export function parseCodexAppServerThreadItem(raw: unknown): CodexAppServerThreadItem | null {
+  const parsed = CodexAppServerThreadItemSchema.safeParse(raw);
+  return parsed.success ? parsed.data : null;
+}
+
 export class CodexAppServerRequestError extends Error {
   constructor(
     message: string,
@@ -299,7 +370,6 @@ export class CodexAppServerRequestError extends Error {
 
 export class CodexAppServerClient implements CodexAppServerGateway {
   private readonly encoder = new TextEncoder();
-  private readonly decoder = new TextDecoder();
   private readonly listeners = new Set<(notification: CodexAppServerNotification) => void>();
   private readonly pending = new Map<number, PendingRequest>();
   private nextId = 1;
@@ -404,22 +474,31 @@ export class CodexAppServerClient implements CodexAppServerGateway {
   private startStdoutLoop(proc: PipedCodexAppServerProcess): void {
     (async () => {
       const reader = proc.stdout.getReader();
+      const decoder = new TextDecoder();
       let buffer = "";
 
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          buffer += this.decoder.decode(value);
 
-          while (true) {
-            const newlineIndex = buffer.indexOf("\n");
-            if (newlineIndex === -1) break;
-            const line = buffer.slice(0, newlineIndex).trim();
-            buffer = buffer.slice(newlineIndex + 1);
-            if (line.length === 0) continue;
+          const decoded = readCodexAppServerStdoutLines({
+            decoder,
+            buffer,
+            chunk: value,
+          });
+          buffer = decoded.buffer;
+          for (const line of decoded.lines) {
             this.handleStdoutLine(line);
           }
+        }
+
+        const decoded = readCodexAppServerStdoutLines({
+          decoder,
+          buffer,
+        });
+        for (const line of decoded.lines) {
+          this.handleStdoutLine(line);
         }
       } catch (error) {
         if (this.proc === proc) {
@@ -432,11 +511,12 @@ export class CodexAppServerClient implements CodexAppServerGateway {
   private startStderrLoop(proc: PipedCodexAppServerProcess): void {
     (async () => {
       const reader = proc.stderr.getReader();
+      const decoder = new TextDecoder();
       try {
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
-          const chunk = this.decoder.decode(value).trim();
+          const chunk = decoder.decode(value, { stream: true }).trim();
           if (chunk.length > 0) {
             log.debug(`[agents] codex app-server stderr: ${chunk}`);
           }

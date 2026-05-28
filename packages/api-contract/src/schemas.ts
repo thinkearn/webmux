@@ -408,8 +408,8 @@ export const AgentsUiWorktreeSummarySchema = z.object({
 });
 
 export const AgentsUiConversationMessageRoleSchema = z.enum(["user", "assistant"]);
-export const AgentsUiConversationMessageStatusSchema = z.enum(["completed", "inProgress"]);
-export const AgentsUiConversationMessageKindSchema = z.enum(["text", "toolUse", "toolResult"]);
+export const AgentsUiConversationMessageStatusSchema = z.enum(["completed", "inProgress", "failed"]);
+export const AgentsUiConversationMessageKindSchema = z.enum(["text", "thinking", "toolUse", "toolResult"]);
 
 export const AgentsUiConversationMessageSchema = z.object({
   id: z.string(),
@@ -419,7 +419,13 @@ export const AgentsUiConversationMessageSchema = z.object({
   status: AgentsUiConversationMessageStatusSchema,
   createdAt: z.string().nullable(),
   kind: AgentsUiConversationMessageKindSchema.optional(),
+  phase: z.string().optional(),
   toolName: z.string().optional(),
+  toolCallId: z.string().optional(),
+  command: z.string().optional(),
+  cwd: z.string().optional(),
+  exitCode: z.number().nullable().optional(),
+  durationMs: z.number().nullable().optional(),
 });
 
 export const AgentsUiConversationStateSchema = z.object({
@@ -450,15 +456,24 @@ export const AgentsUiInterruptResponseSchema = z.object({
 
 export const AgentsUiConversationSnapshotEventSchema = z.object({
   type: z.literal("snapshot"),
+  revision: z.number().int().nonnegative(),
   data: AgentsUiWorktreeConversationResponseSchema,
 });
 
 export const AgentsUiConversationMessageDeltaEventSchema = z.object({
   type: z.literal("messageDelta"),
+  revision: z.number().int().nonnegative(),
   conversationId: z.string(),
   turnId: z.string(),
   itemId: z.string(),
   delta: z.string(),
+});
+
+export const AgentsUiConversationMessageUpsertEventSchema = z.object({
+  type: z.literal("messageUpsert"),
+  revision: z.number().int().nonnegative(),
+  conversationId: z.string(),
+  message: AgentsUiConversationMessageSchema,
 });
 
 export const AgentsUiConversationErrorEventSchema = z.object({
@@ -469,6 +484,7 @@ export const AgentsUiConversationErrorEventSchema = z.object({
 export const AgentsUiConversationEventSchema = z.discriminatedUnion("type", [
   AgentsUiConversationSnapshotEventSchema,
   AgentsUiConversationMessageDeltaEventSchema,
+  AgentsUiConversationMessageUpsertEventSchema,
   AgentsUiConversationErrorEventSchema,
 ]);
 
@@ -620,6 +636,7 @@ export type AgentsUiSendMessageResponse = z.infer<typeof AgentsUiSendMessageResp
 export type AgentsUiInterruptResponse = z.infer<typeof AgentsUiInterruptResponseSchema>;
 export type AgentsUiConversationSnapshotEvent = z.infer<typeof AgentsUiConversationSnapshotEventSchema>;
 export type AgentsUiConversationMessageDeltaEvent = z.infer<typeof AgentsUiConversationMessageDeltaEventSchema>;
+export type AgentsUiConversationMessageUpsertEvent = z.infer<typeof AgentsUiConversationMessageUpsertEventSchema>;
 export type AgentsUiConversationErrorEvent = z.infer<typeof AgentsUiConversationErrorEventSchema>;
 export type AgentsUiConversationEvent = z.infer<typeof AgentsUiConversationEventSchema>;
 export type WorktreeListResponse = z.infer<typeof WorktreeListResponseSchema>;

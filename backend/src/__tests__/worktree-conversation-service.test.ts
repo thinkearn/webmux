@@ -301,6 +301,7 @@ describe("buildConversationState", () => {
           id: "user-1",
           turnId: "turn-1",
           role: "user",
+          kind: "text",
           text: "Inspect the diff",
           status: "completed",
           createdAt: "1970-01-01T00:01:51.000Z",
@@ -309,6 +310,8 @@ describe("buildConversationState", () => {
           id: "assistant-1",
           turnId: "turn-1",
           role: "assistant",
+          kind: "text",
+          phase: "final_answer",
           text: "I inspected it.",
           status: "completed",
           createdAt: "1970-01-01T00:03:20.000Z",
@@ -347,9 +350,183 @@ describe("buildConversationState", () => {
         id: "assistant-message-field",
         turnId: "turn-message-field",
         role: "assistant",
+        kind: "text",
+        phase: "final_answer",
         text: "The newer app server uses message here.",
         status: "completed",
         createdAt: "1970-01-01T00:03:20.000Z",
+      },
+    ]);
+  });
+
+  it("maps commentary as assistant text and command execution items as tool messages", () => {
+    const thread = makeThread({
+      id: "thread-tools",
+      cwd: "/tmp/worktree",
+      updatedAt: 120,
+      statusType: "idle",
+      source: "cli",
+      turns: [
+        makeTurn({
+          id: "turn-tools",
+          status: "completed",
+          startedAt: 111,
+          items: [
+            {
+              type: "agentMessage",
+              id: "commentary-1",
+              text: "I will inspect the directory.",
+              phase: "commentary",
+              memoryCitation: null,
+            },
+            {
+              type: "commandExecution",
+              id: "call-1",
+              command: "/bin/zsh -lc ls",
+              cwd: "/tmp/worktree",
+              status: "completed",
+              commandActions: [{ type: "listFiles", command: "ls", path: null }],
+              aggregatedOutput: "README.md\n",
+              exitCode: 0,
+              durationMs: 12,
+            },
+          ],
+        }),
+      ],
+    });
+
+    expect(buildConversationState(thread).messages).toEqual([
+      {
+        id: "commentary-1",
+        turnId: "turn-tools",
+        role: "assistant",
+        kind: "text",
+        phase: "commentary",
+        text: "I will inspect the directory.",
+        status: "completed",
+        createdAt: "1970-01-01T00:03:20.000Z",
+      },
+      {
+        id: "call-1",
+        turnId: "turn-tools",
+        role: "assistant",
+        kind: "toolUse",
+        toolName: "shell",
+        toolCallId: "call-1",
+        text: "ls",
+        command: "/bin/zsh -lc ls",
+        cwd: "/tmp/worktree",
+        status: "completed",
+        createdAt: "1970-01-01T00:03:20.000Z",
+        exitCode: 0,
+        durationMs: 12,
+      },
+      {
+        id: "call-1:result",
+        turnId: "turn-tools",
+        role: "user",
+        kind: "toolResult",
+        toolName: "shell",
+        toolCallId: "call-1",
+        text: "README.md",
+        command: "/bin/zsh -lc ls",
+        cwd: "/tmp/worktree",
+        status: "completed",
+        createdAt: "1970-01-01T00:03:20.000Z",
+        exitCode: 0,
+        durationMs: 12,
+      },
+    ]);
+  });
+
+  it("dedupes app-server command execution items against session-log tool calls with different ids", () => {
+    const thread = makeThread({
+      id: "thread-tools",
+      cwd: "/tmp/worktree",
+      updatedAt: 120,
+      statusType: "idle",
+      source: "cli",
+      turns: [
+        makeTurn({
+          id: "turn-tools",
+          status: "completed",
+          startedAt: 111,
+          items: [
+            {
+              type: "commandExecution",
+              id: "item-tool-1",
+              command: "/bin/zsh -lc ls",
+              cwd: "/tmp/worktree",
+              status: "completed",
+              commandActions: [{ type: "listFiles", command: "ls", path: null }],
+              aggregatedOutput: "README.md\n",
+              exitCode: 0,
+              durationMs: 12,
+            },
+          ],
+        }),
+      ],
+    });
+
+    expect(buildConversationState(thread, [
+      {
+        id: "call-log-1",
+        turnId: "turn-tools",
+        role: "assistant",
+        kind: "toolUse",
+        toolName: "exec_command",
+        toolCallId: "call-log-1",
+        text: "ls",
+        command: "ls",
+        cwd: "/tmp/worktree",
+        status: "completed",
+        createdAt: "1970-01-01T00:03:20.000Z",
+        exitCode: 0,
+      },
+      {
+        id: "call-log-1:result",
+        turnId: "turn-tools",
+        role: "user",
+        kind: "toolResult",
+        toolName: "exec_command",
+        toolCallId: "call-log-1",
+        text: "README.md",
+        command: "ls",
+        cwd: "/tmp/worktree",
+        status: "completed",
+        createdAt: "1970-01-01T00:03:20.000Z",
+        exitCode: 0,
+      },
+    ]).messages).toEqual([
+      {
+        id: "item-tool-1",
+        turnId: "turn-tools",
+        role: "assistant",
+        kind: "toolUse",
+        toolName: "shell",
+        toolCallId: "item-tool-1",
+        text: "ls",
+        command: "/bin/zsh -lc ls",
+        cwd: "/tmp/worktree",
+        status: "completed",
+        createdAt: "1970-01-01T00:03:20.000Z",
+        exitCode: 0,
+        durationMs: 12,
+      },
+      {
+        id: "item-tool-1:result",
+        turnId: "turn-tools",
+        role: "user",
+        kind: "toolResult",
+        toolName: "shell",
+        toolCallId: "item-tool-1",
+        text: "README.md",
+        command: "/bin/zsh -lc ls",
+        cwd: "/tmp/worktree",
+        status: "completed",
+        createdAt: "1970-01-01T00:03:20.000Z",
+        exitCode: 0,
+        durationMs: 12,
       },
     ]);
   });
@@ -420,6 +597,7 @@ describe("buildConversationState", () => {
           id: "user-2",
           turnId: "turn-interrupted",
           role: "user",
+          kind: "text",
           text: "Stop after the grep",
           status: "completed",
           createdAt: "1970-01-01T00:03:42.000Z",
@@ -428,6 +606,8 @@ describe("buildConversationState", () => {
           id: "assistant-2",
           turnId: "turn-interrupted",
           role: "assistant",
+          kind: "text",
+          phase: "final_answer",
           text: "Interrupted after the grep step.",
           status: "completed",
           createdAt: "1970-01-01T00:03:42.000Z",
@@ -638,7 +818,6 @@ describe("WorktreeConversationService", () => {
       },
     });
     expect(appServer.calls).toEqual([
-      "threadList",
       "threadRead:thread-existing:false",
       "threadRead:thread-existing:true",
       "turnStart:thread-existing:Ship it",
@@ -741,7 +920,7 @@ describe("WorktreeConversationService", () => {
     expect(appServer.calls.at(-1)).toBe("turnInterrupt:thread-active:turn-active");
   });
 
-  it("switches to the newest discovered thread when saved metadata points to an older thread", async () => {
+  it("keeps the saved thread when cwd discovery contains a newer unrelated thread", async () => {
     const metaStore = new Map<string, WorktreeMeta>();
     const worktree = makeWorktree();
     const gitDir = `${worktree.path}/.git`;
@@ -826,15 +1005,14 @@ describe("WorktreeConversationService", () => {
     expect(result.ok).toBe(true);
     if (!result.ok) return;
 
-    expect(result.data.worktree.conversation?.conversationId).toBe("thread-new");
-    expect(result.data.conversation.messages.at(-1)?.text).toBe("Latest reply");
+    expect(result.data.worktree.conversation?.conversationId).toBe("thread-old");
+    expect(result.data.conversation.messages.at(-1)?.text).toBe("Old reply");
     expect(appServer.calls).toEqual([
-      "threadList",
-      "threadRead:thread-new:false",
-      "threadRead:thread-new:true",
+      "threadRead:thread-old:false",
+      "threadRead:thread-old:true",
     ]);
     expect(metaStore.get(gitDir)?.conversation).toEqual(
-      makeCodexConversationMeta("thread-new", worktree.path, "2026-04-16T09:00:00.000Z"),
+      makeCodexConversationMeta("thread-old", worktree.path, "2026-04-14T11:00:00.000Z"),
     );
   });
 

@@ -9,8 +9,10 @@
   } from "./api";
   import {
     applyConversationMessageDelta,
+    applyConversationMessageUpsert,
     buildConversationProgressSignature,
     markConversationTurnStarted,
+    mergeConversationSnapshot,
   } from "./worktree-conversation";
   import type {
     AgentsUiConversationEvent,
@@ -47,6 +49,7 @@
     disconnect: () => void;
   } | null = null;
   let nextRefreshPollingToken = 1;
+  let lastStreamRevision = 0;
 
   const REFRESH_POLL_INTERVAL_MS = 1000;
   const REFRESH_POLL_SETTLE_TICKS = 3;
@@ -54,6 +57,7 @@
   function closeConversationStream(): void {
     streamConnection?.disconnect();
     streamConnection = null;
+    lastStreamRevision = 0;
   }
 
   function supportsStreaming(nextConversation: AgentsUiConversationState | null): boolean {
@@ -65,6 +69,12 @@
   }
 
   function applyConversationResponse(response: AgentsUiWorktreeConversationResponse): void {
+    conversation = mergeConversationSnapshot(conversation, response.conversation);
+    conversationError = null;
+    syncConversationStream();
+  }
+
+  function applyConversationStreamSnapshot(response: AgentsUiWorktreeConversationResponse): void {
     conversation = response.conversation;
     conversationError = null;
     syncConversationStream();
@@ -80,13 +90,20 @@
 
   function handleConversationStreamEvent(conversationId: string, event: AgentsUiConversationEvent): void {
     if (!hasActiveConversationStream(conversationId)) return;
+    if (event.type !== "error") {
+      if (event.revision <= lastStreamRevision) return;
+      lastStreamRevision = event.revision;
+    }
 
     switch (event.type) {
       case "snapshot":
-        applyConversationResponse(event.data);
+        applyConversationStreamSnapshot(event.data);
         break;
       case "messageDelta":
         conversation = applyConversationMessageDelta(conversation, event);
+        break;
+      case "messageUpsert":
+        conversation = applyConversationMessageUpsert(conversation, event);
         break;
       case "error":
         conversationError = event.message;
@@ -111,6 +128,7 @@
     }
 
     closeConversationStream();
+    lastStreamRevision = 0;
     const disconnect = connectWorktreeConversationStream(worktree.branch, {
       onEvent: (event) => {
         handleConversationStreamEvent(conversationId, event);
@@ -204,7 +222,9 @@
       }
       conversation = markConversationTurnStarted(conversation, response.turnId, text);
       syncConversationStream();
-      startRefreshPolling(baselineConversation);
+      if (!supportsStreaming(conversation)) {
+        startRefreshPolling(baselineConversation);
+      }
       onConversationMessageSent();
     } catch (error) {
       conversationError = error instanceof Error ? error.message : String(error);
@@ -218,7 +238,9 @@
     conversationError = null;
     try {
       await interruptWorktreeConversation(worktree.branch);
-      startRefreshPolling(baselineConversation);
+      if (!supportsStreaming(conversation)) {
+        startRefreshPolling(baselineConversation);
+      }
     } catch (error) {
       conversationError = error instanceof Error ? error.message : String(error);
     }
