@@ -8,7 +8,14 @@ import pkg from "../../package.json";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
-const PKG_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
+// When running as a compiled binary (bun build --compile), import.meta.url
+// resolves to a virtual /$bunfs/ path rather than the real on-disk location.
+// process.execPath always points to the real binary, so use it when it differs.
+const _metaPath = fileURLToPath(import.meta.url);
+const _selfDir = _metaPath.startsWith("/") && !_metaPath.startsWith("/$bunfs")
+  ? dirname(_metaPath)
+  : dirname(process.execPath);
+const PKG_ROOT = resolve(_selfDir, "..");
 
 function usage() {
   console.log(`
