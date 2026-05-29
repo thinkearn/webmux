@@ -215,7 +215,7 @@ function makeProfile(overrides: Partial<ProfileConfig> = {}): ProfileConfig {
 
 function makeTurn(input: {
   id: string;
-  status: string;
+  status: CodexAppServerTurn["status"];
   startedAt: number | null;
   items: CodexAppServerTurn["items"];
 }): CodexAppServerTurn {
@@ -300,6 +300,7 @@ describe("buildConversationState", () => {
         {
           id: "user-1",
           turnId: "turn-1",
+          order: 0,
           role: "user",
           kind: "text",
           text: "Inspect the diff",
@@ -309,6 +310,7 @@ describe("buildConversationState", () => {
         {
           id: "assistant-1",
           turnId: "turn-1",
+          order: 1,
           role: "assistant",
           kind: "text",
           phase: "final_answer",
@@ -349,6 +351,7 @@ describe("buildConversationState", () => {
       {
         id: "assistant-message-field",
         turnId: "turn-message-field",
+        order: 0,
         role: "assistant",
         kind: "text",
         phase: "final_answer",
@@ -399,6 +402,7 @@ describe("buildConversationState", () => {
       {
         id: "commentary-1",
         turnId: "turn-tools",
+        order: 0,
         role: "assistant",
         kind: "text",
         phase: "commentary",
@@ -409,6 +413,7 @@ describe("buildConversationState", () => {
       {
         id: "call-1",
         turnId: "turn-tools",
+        order: 1,
         role: "assistant",
         kind: "toolUse",
         toolName: "shell",
@@ -424,6 +429,7 @@ describe("buildConversationState", () => {
       {
         id: "call-1:result",
         turnId: "turn-tools",
+        order: 2,
         role: "user",
         kind: "toolResult",
         toolName: "shell",
@@ -439,7 +445,7 @@ describe("buildConversationState", () => {
     ]);
   });
 
-  it("dedupes app-server command execution items against session-log tool calls with different ids", () => {
+  it("uses app-server command execution items as the transcript source", () => {
     const thread = makeThread({
       id: "thread-tools",
       cwd: "/tmp/worktree",
@@ -468,39 +474,11 @@ describe("buildConversationState", () => {
       ],
     });
 
-    expect(buildConversationState(thread, [
-      {
-        id: "call-log-1",
-        turnId: "turn-tools",
-        role: "assistant",
-        kind: "toolUse",
-        toolName: "exec_command",
-        toolCallId: "call-log-1",
-        text: "ls",
-        command: "ls",
-        cwd: "/tmp/worktree",
-        status: "completed",
-        createdAt: "1970-01-01T00:03:20.000Z",
-        exitCode: 0,
-      },
-      {
-        id: "call-log-1:result",
-        turnId: "turn-tools",
-        role: "user",
-        kind: "toolResult",
-        toolName: "exec_command",
-        toolCallId: "call-log-1",
-        text: "README.md",
-        command: "ls",
-        cwd: "/tmp/worktree",
-        status: "completed",
-        createdAt: "1970-01-01T00:03:20.000Z",
-        exitCode: 0,
-      },
-    ]).messages).toEqual([
+    expect(buildConversationState(thread).messages).toEqual([
       {
         id: "item-tool-1",
         turnId: "turn-tools",
+        order: 0,
         role: "assistant",
         kind: "toolUse",
         toolName: "shell",
@@ -516,6 +494,7 @@ describe("buildConversationState", () => {
       {
         id: "item-tool-1:result",
         turnId: "turn-tools",
+        order: 1,
         role: "user",
         kind: "toolResult",
         toolName: "shell",
@@ -527,6 +506,165 @@ describe("buildConversationState", () => {
         createdAt: "1970-01-01T00:03:20.000Z",
         exitCode: 0,
         durationMs: 12,
+      },
+    ]);
+  });
+
+  it("maps app-server tool items into initial transcript tool blocks", () => {
+    const thread = makeThread({
+      id: "thread-tool-items",
+      cwd: "/tmp/worktree",
+      updatedAt: 120,
+      statusType: "idle",
+      source: "cli",
+      turns: [
+        makeTurn({
+          id: "turn-tool-items",
+          status: "completed",
+          startedAt: 111,
+          items: [
+            {
+              type: "mcpToolCall",
+              id: "mcp-1",
+              server: "linear",
+              tool: "get_issue",
+              status: "completed",
+              arguments: { issueId: "ENG-123" },
+              pluginId: null,
+              result: {
+                content: [{ type: "text", text: "Issue title" }],
+                structuredContent: { status: "Todo" },
+                _meta: null,
+              },
+              error: null,
+              durationMs: 25,
+            },
+            {
+              type: "fileChange",
+              id: "patch-1",
+              status: "completed",
+              changes: [
+                {
+                  path: "README.md",
+                  kind: { type: "update", move_path: null },
+                  diff: "--- a/README.md\n+++ b/README.md\n",
+                },
+              ],
+            },
+            {
+              type: "dynamicToolCall",
+              id: "dynamic-1",
+              namespace: "workspace",
+              tool: "lookup",
+              arguments: { query: "status" },
+              status: "completed",
+              contentItems: [{ type: "inputText", text: "ok" }],
+              success: true,
+              durationMs: 10,
+            },
+            {
+              type: "webSearch",
+              id: "search-1",
+              query: "codex app server",
+              action: {
+                type: "search",
+                query: null,
+                queries: ["codex app server"],
+              },
+            },
+          ],
+        }),
+      ],
+    });
+
+    expect(buildConversationState(thread).messages).toEqual([
+      {
+        id: "mcp-1",
+        turnId: "turn-tool-items",
+        order: 0,
+        role: "assistant",
+        kind: "toolUse",
+        toolName: "linear.get_issue",
+        toolCallId: "mcp-1",
+        text: "{\n  \"issueId\": \"ENG-123\"\n}",
+        status: "completed",
+        createdAt: "1970-01-01T00:03:20.000Z",
+        durationMs: 25,
+      },
+      {
+        id: "mcp-1:result",
+        turnId: "turn-tool-items",
+        order: 1,
+        role: "user",
+        kind: "toolResult",
+        toolName: "linear.get_issue",
+        toolCallId: "mcp-1",
+        text: "Issue title\n\n{\n  \"status\": \"Todo\"\n}",
+        status: "completed",
+        createdAt: "1970-01-01T00:03:20.000Z",
+        durationMs: 25,
+      },
+      {
+        id: "patch-1",
+        turnId: "turn-tool-items",
+        order: 2,
+        role: "assistant",
+        kind: "toolUse",
+        toolName: "file change",
+        toolCallId: "patch-1",
+        text: "update README.md",
+        status: "completed",
+        createdAt: "1970-01-01T00:03:20.000Z",
+      },
+      {
+        id: "patch-1:result",
+        turnId: "turn-tool-items",
+        order: 3,
+        role: "user",
+        kind: "toolResult",
+        toolName: "file change",
+        toolCallId: "patch-1",
+        text: "--- a/README.md\n+++ b/README.md",
+        status: "completed",
+        createdAt: "1970-01-01T00:03:20.000Z",
+      },
+      {
+        id: "dynamic-1",
+        turnId: "turn-tool-items",
+        order: 4,
+        role: "assistant",
+        kind: "toolUse",
+        toolName: "workspace.lookup",
+        toolCallId: "dynamic-1",
+        text: "{\n  \"query\": \"status\"\n}",
+        status: "completed",
+        createdAt: "1970-01-01T00:03:20.000Z",
+        durationMs: 10,
+      },
+      {
+        id: "dynamic-1:result",
+        turnId: "turn-tool-items",
+        order: 5,
+        role: "user",
+        kind: "toolResult",
+        toolName: "workspace.lookup",
+        toolCallId: "dynamic-1",
+        text: "ok",
+        status: "completed",
+        createdAt: "1970-01-01T00:03:20.000Z",
+        durationMs: 10,
+      },
+      {
+        id: "search-1",
+        turnId: "turn-tool-items",
+        order: 6,
+        role: "assistant",
+        kind: "toolUse",
+        toolName: "web search",
+        toolCallId: "search-1",
+        text: "codex app server",
+        status: "completed",
+        createdAt: "1970-01-01T00:03:20.000Z",
       },
     ]);
   });
@@ -596,6 +734,7 @@ describe("buildConversationState", () => {
         {
           id: "user-2",
           turnId: "turn-interrupted",
+          order: 0,
           role: "user",
           kind: "text",
           text: "Stop after the grep",
@@ -605,6 +744,7 @@ describe("buildConversationState", () => {
         {
           id: "assistant-2",
           turnId: "turn-interrupted",
+          order: 1,
           role: "assistant",
           kind: "text",
           phase: "final_answer",
@@ -738,6 +878,89 @@ describe("WorktreeConversationService", () => {
     expect(metaStore.get(gitDir)?.conversation).toEqual(
       makeCodexConversationMeta("thread-new", worktree.path, "2026-04-14T12:00:00.000Z"),
     );
+  });
+
+  it("uses JSONL session messages as the Codex snapshot transcript when available", async () => {
+    const metaStore = new Map<string, WorktreeMeta>();
+    const worktree = makeWorktree();
+    const gitDir = `${worktree.path}/.git`;
+    metaStore.set(gitDir, makeMeta());
+
+    const thread = makeThread({
+      id: "thread-jsonl",
+      cwd: worktree.path,
+      updatedAt: 250,
+      statusType: "idle",
+      source: "cli",
+      turns: [
+        makeTurn({
+          id: "turn-jsonl",
+          status: "completed",
+          startedAt: 111,
+          items: [
+            {
+              type: "userMessage",
+              id: "user-app-server",
+              content: [{ type: "text", text: "App server text only" }],
+            },
+          ],
+        }),
+      ],
+    });
+    const appServer = new FakeCodexAppServer();
+    appServer.listedThreads = [thread];
+    appServer.threads.set(thread.id, structuredClone(thread));
+
+    const service = new WorktreeConversationService({
+      appServer,
+      git: new FakeGitGateway(),
+      resolveLaunchContext: allowCodexLaunchContext,
+      readSessionMessages: async () => [
+        {
+          id: "call-1",
+          turnId: "turn-jsonl",
+          order: 0,
+          role: "assistant",
+          kind: "toolUse",
+          toolName: "exec_command",
+          toolCallId: "call-1",
+          text: "bun test",
+          command: "bun test",
+          status: "completed",
+          createdAt: "2026-05-29T10:00:00.000Z",
+        },
+        {
+          id: "call-1:result",
+          turnId: "turn-jsonl",
+          order: 1,
+          role: "user",
+          kind: "toolResult",
+          toolName: "exec_command",
+          toolCallId: "call-1",
+          text: "pass",
+          command: "bun test",
+          status: "completed",
+          createdAt: "2026-05-29T10:00:01.000Z",
+        },
+      ],
+      readMeta: async (path) => structuredClone(metaStore.get(path) ?? null),
+      writeMeta: async (path, meta) => {
+        metaStore.set(path, structuredClone(meta));
+      },
+    });
+
+    const result = await service.attachWorktreeConversation(worktree);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.data.conversation.messages.map((message) => message.id)).toEqual([
+      "call-1",
+      "call-1:result",
+    ]);
+    expect(result.data.conversation.messages.map((message) => message.text)).toEqual([
+      "bun test",
+      "pass",
+    ]);
   });
 
   it("creates a new thread on attach when none can be resolved", async () => {

@@ -1,59 +1,12 @@
 import { describe, expect, it } from "bun:test";
 import {
   AgentsConversationStreamSession,
+  buildAgentsUiConversationStatusEvent,
   buildAgentsUiMessageDeltaEvent,
   buildAgentsUiMessageUpsertEvents,
-  mergeConversationSnapshotWithLiveMessages,
   readAgentsNotificationThreadId,
-  shouldRefreshAgentsConversationSnapshot,
 } from "../services/agents-ui-stream-service";
-import type { AgentsUiConversationEvent, AgentsUiWorktreeConversationResponse } from "../domain/agents-ui";
-
-function makeSnapshot(overrides: Partial<AgentsUiWorktreeConversationResponse["conversation"]> = {}): AgentsUiWorktreeConversationResponse {
-  return {
-    worktree: {
-      branch: "feature/chat",
-      path: "/tmp/worktree",
-      archived: false,
-      profile: "default",
-      agentName: "codex",
-      agentLabel: "Codex",
-      agentTerminalStale: false,
-      mux: true,
-      status: "idle",
-      dirty: false,
-      unpushed: false,
-      services: [],
-      prs: [],
-      creating: false,
-      creationPhase: null,
-      conversation: {
-        provider: "codexAppServer",
-        conversationId: "thread-1",
-        threadId: "thread-1",
-        cwd: "/tmp/worktree",
-        lastSeenAt: "2026-05-28T10:00:00.000Z",
-      },
-    },
-    conversation: {
-      provider: "codexAppServer",
-      conversationId: "thread-1",
-      cwd: "/tmp/worktree",
-      running: false,
-      activeTurnId: null,
-      messages: [],
-      ...overrides,
-    },
-  };
-}
-
-async function waitFor(predicate: () => boolean): Promise<void> {
-  for (let index = 0; index < 20; index += 1) {
-    if (predicate()) return;
-    await Bun.sleep(1);
-  }
-  throw new Error("timed out waiting for condition");
-}
+import type { AgentsUiConversationEvent } from "../domain/agents-ui";
 
 describe("agents-ui-stream-service", () => {
   it("reads the thread id from thread-scoped notifications", () => {
@@ -74,11 +27,12 @@ describe("agents-ui-stream-service", () => {
         itemId: "item-1",
         delta: "hello",
       },
-    })).toEqual({
+    }, 7)).toEqual({
       type: "messageDelta",
       conversationId: "thread-1",
       turnId: "turn-1",
       itemId: "item-1",
+      order: 7,
       delta: "hello",
     });
   });
@@ -98,13 +52,14 @@ describe("agents-ui-stream-service", () => {
           memoryCitation: null,
         },
       },
-    })).toEqual([
+    }, 3)).toEqual([
       {
         type: "messageUpsert",
         conversationId: "thread-1",
         message: {
           id: "commentary-1",
           turnId: "turn-1",
+          order: 3,
           role: "assistant",
           kind: "text",
           phase: "commentary",
@@ -114,35 +69,6 @@ describe("agents-ui-stream-service", () => {
         },
       },
     ]);
-  });
-
-  it("marks turn and relevant item notifications as snapshot refresh points", () => {
-    expect(shouldRefreshAgentsConversationSnapshot({
-      method: "turn/started",
-      params: {
-        threadId: "thread-1",
-      },
-    })).toBe(true);
-
-    expect(shouldRefreshAgentsConversationSnapshot({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        item: {
-          type: "userMessage",
-        },
-      },
-    })).toBe(true);
-
-    expect(shouldRefreshAgentsConversationSnapshot({
-      method: "item/completed",
-      params: {
-        threadId: "thread-1",
-        item: {
-          type: "reasoning",
-        },
-      },
-    })).toBe(false);
   });
 
   it("builds upsert events from command execution notifications", () => {
@@ -164,13 +90,14 @@ describe("agents-ui-stream-service", () => {
           durationMs: 4,
         },
       },
-    })).toEqual([
+    }, 4)).toEqual([
       {
         type: "messageUpsert",
         conversationId: "thread-1",
         message: {
           id: "call-1",
           turnId: "turn-1",
+          order: 4,
           role: "assistant",
           kind: "toolUse",
           toolName: "shell",
@@ -190,6 +117,7 @@ describe("agents-ui-stream-service", () => {
         message: {
           id: "call-1:result",
           turnId: "turn-1",
+          order: 5,
           role: "user",
           kind: "toolResult",
           toolName: "shell",
@@ -206,134 +134,150 @@ describe("agents-ui-stream-service", () => {
     ]);
   });
 
-  it("merges live stream messages into stale snapshots on the server side", () => {
-    expect(mergeConversationSnapshotWithLiveMessages(makeSnapshot(), [
-      {
-        id: "assistant-1",
+  it("builds upsert events from mcp tool call notifications", () => {
+    expect(buildAgentsUiMessageUpsertEvents({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
         turnId: "turn-1",
-        role: "assistant",
-        kind: "text",
-        text: "Streaming status",
-        status: "inProgress",
-        createdAt: null,
-      },
-    ]).conversation).toEqual({
-      provider: "codexAppServer",
-      conversationId: "thread-1",
-      cwd: "/tmp/worktree",
-      running: true,
-      activeTurnId: "turn-1",
-      messages: [
-        {
-          id: "assistant-1",
-          turnId: "turn-1",
-          role: "assistant",
-          kind: "text",
-          text: "Streaming status",
-          status: "inProgress",
-          createdAt: null,
+        completedAtMs: 1779965441194,
+        item: {
+          type: "mcpToolCall",
+          id: "mcp-1",
+          server: "linear",
+          tool: "get_issue",
+          status: "completed",
+          arguments: { issueId: "ENG-123" },
+          pluginId: null,
+          result: {
+            content: [{ type: "text", text: "Issue title" }],
+            structuredContent: null,
+            _meta: null,
+          },
+          error: null,
+          durationMs: 25,
         },
-      ],
-    });
-  });
-
-  it("does not duplicate live messages already present in snapshots under a new item id", () => {
-    expect(mergeConversationSnapshotWithLiveMessages(makeSnapshot({
-      messages: [
-        {
-          id: "snapshot-assistant",
+      },
+    }, 4)).toEqual([
+      {
+        type: "messageUpsert",
+        conversationId: "thread-1",
+        message: {
+          id: "mcp-1",
           turnId: "turn-1",
+          order: 4,
           role: "assistant",
-          kind: "text",
-          phase: "final_answer",
-          text: "Good. The branch is in a clean committed state.",
+          kind: "toolUse",
+          toolName: "linear.get_issue",
+          toolCallId: "mcp-1",
+          text: "{\n  \"issueId\": \"ENG-123\"\n}",
           status: "completed",
           createdAt: "2026-05-28T10:50:41.194Z",
+          durationMs: 25,
         },
-      ],
-    }), [
-      {
-        id: "live-assistant",
-        turnId: "turn-1",
-        role: "assistant",
-        kind: "text",
-        phase: "final_answer",
-        text: "Good. The branch is in a clean committed state.",
-        status: "completed",
-        createdAt: "2026-05-28T10:50:41.194Z",
       },
-    ]).conversation.messages).toEqual([
       {
-        id: "snapshot-assistant",
-        turnId: "turn-1",
-        role: "assistant",
-        kind: "text",
-        phase: "final_answer",
-        text: "Good. The branch is in a clean committed state.",
-        status: "completed",
-        createdAt: "2026-05-28T10:50:41.194Z",
+        type: "messageUpsert",
+        conversationId: "thread-1",
+        message: {
+          id: "mcp-1:result",
+          turnId: "turn-1",
+          order: 5,
+          role: "user",
+          kind: "toolResult",
+          toolName: "linear.get_issue",
+          toolCallId: "mcp-1",
+          text: "Issue title",
+          status: "completed",
+          createdAt: "2026-05-28T10:50:41.194Z",
+          durationMs: 25,
+        },
       },
     ]);
   });
 
-  it("does not keep running true when a completed snapshot has shorter text", () => {
-    expect(mergeConversationSnapshotWithLiveMessages(makeSnapshot({
-      messages: [
-        {
-          id: "assistant-1",
-          turnId: "turn-1",
-          role: "assistant",
-          kind: "text",
-          text: "Partial",
-          status: "completed",
-          createdAt: "2026-05-28T10:50:41.194Z",
-        },
-      ],
-    }), [
-      {
-        id: "assistant-1",
+  it("builds conversation status events from turn lifecycle notifications", () => {
+    expect(buildAgentsUiConversationStatusEvent({
+      method: "turn/started",
+      params: {
+        threadId: "thread-1",
         turnId: "turn-1",
-        role: "assistant",
-        kind: "text",
-        text: "Partial answer",
-        status: "inProgress",
-        createdAt: null,
       },
-    ]).conversation).toEqual({
-      provider: "codexAppServer",
+    })).toEqual({
+      type: "conversationStatus",
       conversationId: "thread-1",
-      cwd: "/tmp/worktree",
+      running: true,
+      activeTurnId: "turn-1",
+    });
+
+    expect(buildAgentsUiConversationStatusEvent({
+      method: "turn/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+      },
+    })).toEqual({
+      type: "conversationStatus",
+      conversationId: "thread-1",
       running: false,
       activeTurnId: null,
-      messages: [
-        {
-          id: "assistant-1",
-          turnId: "turn-1",
-          role: "assistant",
-          kind: "text",
-          text: "Partial answer",
-          status: "completed",
-          createdAt: "2026-05-28T10:50:41.194Z",
-        },
-      ],
     });
   });
 
-  it("adds revisions and includes live deltas in refresh snapshots", async () => {
+  it("builds terminal conversation status events from thread status notifications", () => {
+    expect(buildAgentsUiConversationStatusEvent({
+      method: "thread/status/changed",
+      params: {
+        threadId: "thread-1",
+        status: {
+          type: "systemError",
+        },
+      },
+    })).toEqual({
+      type: "conversationStatus",
+      conversationId: "thread-1",
+      running: false,
+      activeTurnId: null,
+    });
+
+    expect(buildAgentsUiConversationStatusEvent({
+      method: "thread/status/changed",
+      params: {
+        threadId: "thread-1",
+        status: {
+          type: "active",
+        },
+      },
+    })).toBeNull();
+  });
+
+  it("streams live events without emitting snapshots", () => {
     const events: AgentsUiConversationEvent[] = [];
     const session = new AgentsConversationStreamSession({
       conversationId: "thread-1",
-      loadSnapshot: async () => ({ ok: true, data: makeSnapshot() }),
+      nextOrder: 2,
       send: (event) => events.push(event),
     });
 
-    session.sendSnapshot(makeSnapshot());
     session.handleNotification({
       method: "item/started",
       params: {
         threadId: "thread-1",
         turnId: "turn-1",
         startedAtMs: 1779965441194,
+        item: {
+          type: "userMessage",
+          id: "user-1",
+          content: [{ type: "text", text: "Ship it" }],
+        },
+      },
+    });
+    session.handleNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        startedAtMs: 1779965441195,
         item: {
           type: "agentMessage",
           id: "assistant-1",
@@ -349,86 +293,30 @@ describe("agents-ui-stream-service", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         itemId: "assistant-1",
-        delta: "Streaming status",
-      },
-    });
-    session.handleNotification({
-      method: "turn/completed",
-      params: {
-        threadId: "thread-1",
+        delta: "Working",
       },
     });
 
-    await waitFor(() => events.length === 4);
-
-    expect(events.map((event) => event.type === "error" ? null : event.revision)).toEqual([1, 2, 3, 4]);
-    expect(events.at(-1)).toEqual({
-      type: "snapshot",
-      revision: 4,
-      data: makeSnapshot({
-        running: false,
-        activeTurnId: null,
-        messages: [
-          {
-            id: "assistant-1",
-            turnId: "turn-1",
-            role: "assistant",
-            kind: "text",
-            phase: "commentary",
-            text: "Streaming status",
-            status: "completed",
-            createdAt: "2026-05-28T10:50:41.194Z",
-          },
-        ],
-      }),
-    });
+    expect(events.map((event) => event.type)).toEqual(["messageUpsert", "messageUpsert", "messageDelta"]);
+    expect(events.map((event) => event.type === "error" ? null : event.revision)).toEqual([1, 2, 3]);
+    expect(events[0]).toMatchObject({ type: "messageUpsert", message: { id: "user-1", order: 2 } });
+    expect(events[1]).toMatchObject({ type: "messageUpsert", message: { id: "assistant-1", order: 3 } });
+    expect(events[2]).toMatchObject({ type: "messageDelta", itemId: "assistant-1", order: 3 });
   });
 
-  it("serializes overlapping snapshot refreshes", async () => {
-    const events: AgentsUiConversationEvent[] = [];
-    let resolveFirstRefresh: (value: { ok: true; data: AgentsUiWorktreeConversationResponse }) => void = () => {
-      throw new Error("first refresh promise was not created");
-    };
-    let refreshCount = 0;
-    const session = new AgentsConversationStreamSession({
-      conversationId: "thread-1",
-      loadSnapshot: () => {
-        refreshCount += 1;
-        if (refreshCount === 1) {
-          return new Promise<{ ok: true; data: AgentsUiWorktreeConversationResponse }>((resolve) => {
-            resolveFirstRefresh = resolve;
-          });
-        }
-        return Promise.resolve({ ok: true, data: makeSnapshot() });
-      },
-      send: (event) => events.push(event),
-    });
-
-    session.handleNotification({ method: "turn/completed", params: { threadId: "thread-1" } });
-    session.handleNotification({ method: "thread/status/changed", params: { threadId: "thread-1" } });
-
-    expect(refreshCount).toBe(1);
-    resolveFirstRefresh({ ok: true, data: makeSnapshot() });
-    await waitFor(() => refreshCount === 2 && events.length === 2);
-
-    expect(events.map((event) => event.type === "error" ? null : event.revision)).toEqual([1, 2]);
-  });
-
-  it("does not keep running true after an authoritative completed snapshot", async () => {
+  it("streams conversation status without replacing the transcript", () => {
     const events: AgentsUiConversationEvent[] = [];
     const session = new AgentsConversationStreamSession({
       conversationId: "thread-1",
-      loadSnapshot: async () => ({ ok: true, data: makeSnapshot() }),
+      nextOrder: 0,
       send: (event) => events.push(event),
     });
 
     session.handleNotification({
-      method: "item/agentMessage/delta",
+      method: "turn/started",
       params: {
         threadId: "thread-1",
         turnId: "turn-1",
-        itemId: "assistant-1",
-        delta: "Partial answer",
       },
     });
     session.handleNotification({
@@ -439,34 +327,118 @@ describe("agents-ui-stream-service", () => {
       },
     });
 
-    await waitFor(() => events.length === 2);
-
-    expect(events.at(-1)).toEqual({
-      type: "snapshot",
-      revision: 2,
-      data: makeSnapshot({
+    expect(events).toEqual([
+      {
+        type: "conversationStatus",
+        revision: 1,
+        conversationId: "thread-1",
+        running: true,
+        activeTurnId: "turn-1",
+      },
+      {
+        type: "conversationStatus",
+        revision: 2,
+        conversationId: "thread-1",
         running: false,
         activeTurnId: null,
-        messages: [
-          {
-            id: "assistant-1",
-            turnId: "turn-1",
-            role: "assistant",
-            kind: "text",
-            text: "Partial answer",
-            status: "completed",
-            createdAt: null,
-          },
-        ],
-      }),
-    });
+      },
+    ]);
   });
 
-  it("drops unmatched in-progress live messages when a later snapshot is not running", () => {
+  it("ignores unsupported item notifications without consuming visible order", () => {
     const events: AgentsUiConversationEvent[] = [];
     const session = new AgentsConversationStreamSession({
       conversationId: "thread-1",
-      loadSnapshot: async () => ({ ok: true, data: makeSnapshot() }),
+      nextOrder: 4,
+      send: (event) => events.push(event),
+    });
+
+    session.handleNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        startedAtMs: 1779965441194,
+        item: {
+          type: "reasoning",
+          id: "reasoning-1",
+        },
+      },
+    });
+    session.handleNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        startedAtMs: 1779965441195,
+        item: {
+          type: "agentMessage",
+          id: "assistant-1",
+          text: "",
+          phase: "commentary",
+          memoryCitation: null,
+        },
+      },
+    });
+
+    expect(events).toHaveLength(1);
+    expect(events[0]).toMatchObject({ type: "messageUpsert", message: { id: "assistant-1", order: 4 } });
+  });
+
+  it("reserves one order for text items and two for command executions", () => {
+    const events: AgentsUiConversationEvent[] = [];
+    const session = new AgentsConversationStreamSession({
+      conversationId: "thread-1",
+      nextOrder: 4,
+      send: (event) => events.push(event),
+    });
+
+    session.handleNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: 1779965441194,
+        item: {
+          type: "commandExecution",
+          id: "call-1",
+          command: "/bin/zsh -lc ls",
+          cwd: "/tmp/worktree",
+          status: "completed",
+          commandActions: [{ type: "listFiles", command: "ls", path: null }],
+          aggregatedOutput: "README.md\n",
+          exitCode: 0,
+          durationMs: 4,
+        },
+      },
+    });
+    session.handleNotification({
+      method: "item/started",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        startedAtMs: 1779965441195,
+        item: {
+          type: "agentMessage",
+          id: "assistant-1",
+          text: "",
+          phase: "commentary",
+          memoryCitation: null,
+        },
+      },
+    });
+
+    expect(events).toHaveLength(3);
+    expect(events[0]).toMatchObject({ type: "messageUpsert", message: { id: "call-1", order: 4 } });
+    expect(events[1]).toMatchObject({ type: "messageUpsert", message: { id: "call-1:result", order: 5 } });
+    expect(events[2]).toMatchObject({ type: "messageUpsert", message: { id: "assistant-1", order: 6 } });
+  });
+
+  it("keeps delta and upsert order stable for the same item", () => {
+    const events: AgentsUiConversationEvent[] = [];
+    const session = new AgentsConversationStreamSession({
+      conversationId: "thread-1",
+      nextOrder: 7,
       send: (event) => events.push(event),
     });
 
@@ -476,15 +448,56 @@ describe("agents-ui-stream-service", () => {
         threadId: "thread-1",
         turnId: "turn-1",
         itemId: "assistant-1",
-        delta: "Partial answer",
+        delta: "Partial",
       },
     });
-    session.sendSnapshot(makeSnapshot());
-
-    expect(events.at(-1)).toEqual({
-      type: "snapshot",
-      revision: 2,
-      data: makeSnapshot(),
+    session.handleNotification({
+      method: "item/completed",
+      params: {
+        threadId: "thread-1",
+        turnId: "turn-1",
+        completedAtMs: 1779965441194,
+        item: {
+          type: "agentMessage",
+          id: "assistant-1",
+          text: "Final",
+          phase: "final_answer",
+          memoryCitation: null,
+        },
+      },
     });
+
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({ type: "messageDelta", itemId: "assistant-1", order: 7 });
+    expect(events[1]).toMatchObject({
+      type: "messageUpsert",
+      message: {
+        id: "assistant-1",
+        order: 7,
+        text: "Final",
+        status: "completed",
+      },
+    });
+  });
+
+  it("ignores notifications for other threads", () => {
+    const events: AgentsUiConversationEvent[] = [];
+    const session = new AgentsConversationStreamSession({
+      conversationId: "thread-1",
+      nextOrder: 0,
+      send: (event) => events.push(event),
+    });
+
+    session.handleNotification({
+      method: "item/agentMessage/delta",
+      params: {
+        threadId: "thread-2",
+        turnId: "turn-1",
+        itemId: "assistant-1",
+        delta: "Wrong thread",
+      },
+    });
+
+    expect(events).toEqual([]);
   });
 });

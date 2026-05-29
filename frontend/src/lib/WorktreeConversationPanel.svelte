@@ -43,10 +43,8 @@
   const supportsAgentChat = $derived(worktree.agentName === "codex" || worktree.agentName === "claude");
   const chatAvailable = $derived(supportsAgentChat && worktree.mux === "✓");
   const showInterrupt = $derived(chatAvailable && (conversation?.running ?? false));
-  const showProcessingIndicator = $derived(
-    (conversation?.running ?? false)
-      && !(conversation?.messages.some((message) => message.status === "inProgress" && isVisibleTranscriptMessage(message)) ?? false),
-  );
+  const showComposerInterrupt = $derived(showInterrupt && !conversationError);
+  const showProcessingIndicator = $derived(isSending || showComposerInterrupt);
   const transcriptItems = $derived(buildTranscriptItems((conversation?.messages ?? []).filter(isVisibleTranscriptMessage)));
   const canSend = $derived(
     chatAvailable
@@ -95,6 +93,10 @@
     if (durationMs === null || durationMs === undefined) return null;
     if (durationMs < 1000) return `${durationMs}ms`;
     return `${(durationMs / 1000).toFixed(1)}s`;
+  }
+
+  function showToolInputFade(text: string): boolean {
+    return text.split("\n").length > 2 || text.length > 160;
   }
 
   function messageKind(message: AgentsUiConversationMessage): NonNullable<AgentsUiConversationMessage["kind"]> {
@@ -166,8 +168,44 @@
   </button>
 {/snippet}
 
+{#snippet sendIcon()}
+  <svg
+    aria-hidden="true"
+    xmlns="http://www.w3.org/2000/svg"
+    width="22"
+    height="22"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <path d="m9 10-4 4 4 4" />
+    <path d="M5 14h11a4 4 0 0 0 4-4V6" />
+  </svg>
+{/snippet}
+
+{#snippet stopIcon()}
+  <svg
+    aria-hidden="true"
+    xmlns="http://www.w3.org/2000/svg"
+    width="22"
+    height="22"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2.5"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+  >
+    <rect x="7" y="7" width="10" height="10" rx="1.5" />
+  </svg>
+{/snippet}
+
 {#snippet processingIndicator()}
-  <div class="self-start max-w-[88%] rounded-md border border-edge bg-topbar px-3 py-2 text-xs text-muted">
+  <div class="flex max-w-[88%] items-center gap-2 self-start rounded-md border border-edge bg-topbar px-3 py-2 text-xs text-muted">
+    <span class="spinner"></span>
     {agentLabel} is processing
   </div>
 {/snippet}
@@ -202,11 +240,6 @@
     {/if}
 
     <div class="flex min-h-0 flex-1 flex-col px-4 pt-4">
-      <div class="mb-3 flex items-center justify-between gap-3 text-[11px] uppercase tracking-[0.12em] text-muted">
-        <div>{conversation?.running ? "Turn in progress" : "Ready"}</div>
-        <div>{conversationLoading && !conversation ? `Connecting to ${agentLabel}` : agentLabel}</div>
-      </div>
-
       <div bind:this={transcriptViewport} class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden pb-4 pr-1">
         {#if conversationLoading && !conversation}
           <div class="rounded-md border border-edge bg-topbar px-4 py-5 text-sm text-muted">
@@ -238,36 +271,45 @@
             {:else if item.type === "tool"}
               {@const message = item.tool}
               {@const result = item.result}
-              <div class={`self-start max-w-[94%] min-w-0 rounded-md border px-3 py-2 text-xs ${
-                message.status === "failed" || result?.status === "failed"
-                  ? "border-danger/40 bg-danger/10 text-primary"
-                  : "border-edge bg-topbar/70 text-primary"
-              }`}>
-                <div class="mb-1 flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] uppercase tracking-[0.12em] text-muted">
-                  <span>{toolStatusLabel(message)} {message.toolName ?? "tool"}</span>
-                  {#if exitCodeLabel(message)}
-                    <span>{exitCodeLabel(message)}</span>
+              <details
+                class={`group self-start max-w-[94%] min-w-0 rounded-md border text-xs ${
+                  message.status === "failed" || result?.status === "failed"
+                    ? "border-danger/30 bg-danger/10 text-primary"
+                    : "border-edge/70 bg-topbar/40 text-primary"
+                }`}
+                open={message.status === "failed" || result?.status === "failed"}
+              >
+                <summary class="cursor-pointer px-3 py-2 text-muted">
+                  <div class="inline-flex flex-wrap items-center gap-x-2 gap-y-1 text-[10px] uppercase tracking-[0.12em]">
+                    <span>{toolStatusLabel(message)} {message.toolName ?? "tool"}</span>
+                    {#if exitCodeLabel(message)}
+                      <span>{exitCodeLabel(message)}</span>
+                    {/if}
+                    {#if formatDuration(message.durationMs)}
+                      <span>{formatDuration(message.durationMs)}</span>
+                    {/if}
+                  </div>
+                  <div class="group-open:hidden relative mt-1 max-h-[2.05rem] overflow-hidden">
+                    <pre class="whitespace-pre-wrap break-words font-mono text-[11px] leading-[1.35] text-primary/75">{message.text}</pre>
+                    {#if showToolInputFade(message.text)}
+                      <div class="pointer-events-none absolute inset-x-0 bottom-0 h-5 bg-gradient-to-b from-transparent to-topbar"></div>
+                    {/if}
+                  </div>
+                </summary>
+
+                <div class="border-t border-edge/60 px-3 py-2">
+                  <pre class="whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-primary">{message.text}</pre>
+                  {#if message.status === "inProgress"}
+                    <div class="mt-2 text-[10px] uppercase tracking-[0.12em] text-muted">running</div>
                   {/if}
-                  {#if formatDuration(message.durationMs)}
-                    <span>{formatDuration(message.durationMs)}</span>
+                  {#if result}
+                    <div class="mt-3 border-t border-edge/60 pt-2">
+                      <div class="mb-1 text-[10px] uppercase tracking-[0.12em] text-muted">Output</div>
+                      <pre class="max-h-[18rem] overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed text-primary">{result.text}</pre>
+                    </div>
                   {/if}
                 </div>
-                <div class="whitespace-pre-wrap break-words font-mono">{message.text}</div>
-                {#if message.status === "inProgress"}
-                  <div class="mt-2 text-[10px] uppercase tracking-[0.12em] text-muted">running</div>
-                {/if}
-                {#if result}
-                  <details
-                    class="mt-2 rounded-md border border-edge/80 bg-surface/60 px-2 py-1.5 text-primary"
-                    open={result.status === "failed"}
-                  >
-                    <summary class="cursor-pointer text-[10px] uppercase tracking-[0.12em] text-muted">
-                      Output
-                    </summary>
-                    <pre class="mt-2 max-h-[18rem] overflow-auto whitespace-pre-wrap break-words font-mono text-[11px] leading-relaxed">{result.text}</pre>
-                  </details>
-                {/if}
-              </div>
+              </details>
             {:else}
               {@const message = item.message}
               <div
@@ -289,35 +331,39 @@
     </div>
 
     <div
-      class="border-t border-edge bg-topbar px-4 pb-4 pt-3"
+      class="border-t border-edge bg-topbar px-4 pb-4 pt-4"
       style="padding-bottom: max(1rem, env(safe-area-inset-bottom, 0px));"
     >
-      <textarea
-        id="conversation-composer"
-        aria-label="Message"
-        class="block min-h-[7rem] w-full max-w-full rounded-md border border-edge bg-surface px-3 py-2 text-sm text-primary outline-none transition focus:border-accent"
-        placeholder="ask anything"
-        value={composerText}
-        oninput={handleComposerInput}
-        onkeydown={handleComposerKeydown}
-        disabled={isSending}
-      ></textarea>
+      <div class="relative">
+        <textarea
+          id="conversation-composer"
+          aria-label="Message"
+          class="block min-h-[5.25rem] w-full max-w-full resize-none rounded-2xl border border-edge bg-surface py-3 pl-4 pr-14 text-sm text-primary outline-none transition placeholder:text-muted/70 focus:border-accent"
+          placeholder="ask anything"
+          value={composerText}
+          oninput={handleComposerInput}
+          onkeydown={handleComposerKeydown}
+          disabled={isSending}
+        ></textarea>
 
-      <div class="mt-3 flex items-center justify-between gap-3">
-        <div class="text-[11px] text-muted">
-          {conversation?.running ? "Wait for the current turn to finish" : "Enter to send, Shift+Enter for newline"}
-        </div>
-
-        {#if showInterrupt && !conversationError}
-          {@render interruptButton()}
+        {#if showComposerInterrupt}
+          <button
+            type="button"
+            aria-label="Interrupt"
+            class="absolute right-3 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-md text-muted transition hover:bg-hover hover:text-primary"
+            onclick={onInterrupt}
+          >
+            {@render stopIcon()}
+          </button>
         {:else}
           <button
             type="button"
-            class="rounded-md border border-accent bg-accent px-4 py-2 text-sm font-medium text-white transition disabled:cursor-not-allowed disabled:border-edge disabled:bg-edge disabled:text-muted"
+            aria-label="Send"
+            class="absolute right-3 top-1/2 flex size-8 -translate-y-1/2 items-center justify-center rounded-md text-muted transition enabled:hover:bg-hover enabled:hover:text-primary disabled:cursor-not-allowed disabled:opacity-45"
             onclick={onSend}
             disabled={!canSend}
           >
-            {isSending ? "Sending..." : "Send"}
+            {@render sendIcon()}
           </button>
         {/if}
       </div>

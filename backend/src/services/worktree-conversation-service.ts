@@ -3,6 +3,14 @@ import type {
   CodexAppServerAgentMessageItem,
   CodexAppServerApprovalPolicy,
   CodexAppServerCommandExecutionItem,
+  CodexAppServerDynamicToolCallStatus,
+  CodexAppServerDynamicToolCallContentItem,
+  CodexAppServerDynamicToolCallItem,
+  CodexAppServerFileChangeItem,
+  CodexAppServerFileUpdateChange,
+  CodexAppServerMcpToolCallItem,
+  CodexAppServerMcpToolCallStatus,
+  CodexAppServerPatchApplyStatus,
   CodexAppServerPersonality,
   CodexAppServerSandboxMode,
   CodexAppServerThread,
@@ -10,6 +18,7 @@ import type {
   CodexAppServerThreadListResponse,
   CodexAppServerTurn,
   CodexAppServerUserMessageItem,
+  CodexAppServerWebSearchItem,
 } from "../adapters/codex-app-server";
 import type { GitGateway } from "../adapters/git";
 import type { ProfileConfig } from "../domain/config";
@@ -27,8 +36,9 @@ import type {
   WorktreeSnapshot,
 } from "../domain/model";
 import { log } from "../lib/log";
-import { readCodexSessionMessages } from "./codex-session-log-service";
+import { isRecord } from "../lib/type-guards";
 import { buildAgentsUiWorktreeSummary } from "./agents-ui-service";
+import { readCodexSessionMessages } from "./codex-session-log-service";
 import { err, ok, type WorktreeConversationResult } from "./worktree-conversation-result";
 
 export interface CodexAppServerLaunchContext {
@@ -48,8 +58,8 @@ export interface WorktreeConversationServiceDependencies {
   resolveLaunchContext: (
     input: ResolveCodexAppServerLaunchContextInput,
   ) => Promise<WorktreeConversationResult<CodexAppServerLaunchContext>> | WorktreeConversationResult<CodexAppServerLaunchContext>;
-  readSessionMessages?: (thread: CodexAppServerThread) => Promise<AgentsUiConversationMessage[]>;
   now?: () => Date;
+  readSessionMessages?: (thread: CodexAppServerThread) => Promise<AgentsUiConversationMessage[]>;
   readMeta?: (gitDir: string) => Promise<WorktreeMeta | null>;
   writeMeta?: (gitDir: string, meta: WorktreeMeta) => Promise<void>;
 }
@@ -115,6 +125,22 @@ function isCommandExecutionItem(item: CodexAppServerThreadItem): item is CodexAp
   return item.type === "commandExecution";
 }
 
+function isFileChangeItem(item: CodexAppServerThreadItem): item is CodexAppServerFileChangeItem {
+  return item.type === "fileChange";
+}
+
+function isMcpToolCallItem(item: CodexAppServerThreadItem): item is CodexAppServerMcpToolCallItem {
+  return item.type === "mcpToolCall";
+}
+
+function isDynamicToolCallItem(item: CodexAppServerThreadItem): item is CodexAppServerDynamicToolCallItem {
+  return item.type === "dynamicToolCall";
+}
+
+function isWebSearchItem(item: CodexAppServerThreadItem): item is CodexAppServerWebSearchItem {
+  return item.type === "webSearch";
+}
+
 function extractUserText(item: CodexAppServerUserMessageItem): string {
   return item.content
     .map((contentItem) => contentItem.text ?? "")
@@ -127,10 +153,15 @@ function extractAgentText(item: CodexAppServerAgentMessageItem): string {
 }
 
 function commandExecutionStatus(item: CodexAppServerCommandExecutionItem): AgentsUiConversationMessage["status"] {
-  if (isActiveTurnStatus(item.status)) return "inProgress";
-  if (item.exitCode !== null && item.exitCode !== 0) return "failed";
-  if (item.status === "failed" || item.status === "error" || item.status === "cancelled") return "failed";
-  return "completed";
+  switch (item.status) {
+    case "inProgress":
+      return "inProgress";
+    case "completed":
+      return item.exitCode !== null && item.exitCode !== 0 ? "failed" : "completed";
+    case "failed":
+    case "declined":
+      return "failed";
+  }
 }
 
 function commandExecutionDisplayText(item: CodexAppServerCommandExecutionItem): string {
@@ -140,7 +171,96 @@ function commandExecutionDisplayText(item: CodexAppServerCommandExecutionItem): 
   return commands.length > 0 ? commands.join(" && ") : item.command;
 }
 
-function isActiveTurnStatus(status: string): boolean {
+function toolStatus(
+  status: CodexAppServerPatchApplyStatus | CodexAppServerMcpToolCallStatus | CodexAppServerDynamicToolCallStatus,
+): AgentsUiConversationMessage["status"] {
+  switch (status) {
+    case "inProgress":
+      return "inProgress";
+    case "completed":
+      return "completed";
+    case "failed":
+    case "declined":
+      return "failed";
+  }
+}
+
+function jsonDisplayText(value: unknown): string {
+  return typeof value === "string" ? value : JSON.stringify(value, null, 2) ?? "";
+}
+
+function patchChangeLabel(change: CodexAppServerFileUpdateChange): string {
+  switch (change.kind.type) {
+    case "add":
+      return `add ${change.path}`;
+    case "delete":
+      return `delete ${change.path}`;
+    case "update":
+      return change.kind.move_path ? `move ${change.kind.move_path} -> ${change.path}` : `update ${change.path}`;
+  }
+}
+
+function fileChangeDisplayText(item: CodexAppServerFileChangeItem): string {
+  return item.changes.map(patchChangeLabel).join("\n");
+}
+
+function fileChangeResultText(item: CodexAppServerFileChangeItem): string {
+  return item.changes
+    .map((change) => change.diff.trimEnd())
+    .filter((diff) => diff.length > 0)
+    .join("\n\n");
+}
+
+function mcpContentText(content: unknown): string {
+  if (isRecord(content) && typeof content.text === "string") return content.text;
+  return jsonDisplayText(content);
+}
+
+function mcpToolResultText(item: CodexAppServerMcpToolCallItem): string {
+  if (item.error) return item.error.message;
+  if (!item.result) return "";
+
+  const parts = item.result.content.map(mcpContentText);
+  if (item.result.structuredContent !== null) {
+    parts.push(jsonDisplayText(item.result.structuredContent));
+  }
+  return parts.join("\n\n").trim();
+}
+
+function dynamicToolName(item: CodexAppServerDynamicToolCallItem): string {
+  return item.namespace ? `${item.namespace}.${item.tool}` : item.tool;
+}
+
+function dynamicToolContentText(content: CodexAppServerDynamicToolCallContentItem): string {
+  switch (content.type) {
+    case "inputText":
+      return content.text;
+    case "inputImage":
+      return content.imageUrl;
+  }
+}
+
+function dynamicToolResultText(item: CodexAppServerDynamicToolCallItem): string {
+  return (item.contentItems ?? []).map(dynamicToolContentText).join("\n\n").trim();
+}
+
+function webSearchDisplayText(item: CodexAppServerWebSearchItem): string {
+  const action = item.action;
+  if (!action) return item.query;
+
+  switch (action.type) {
+    case "search":
+      return action.queries?.join("\n") ?? action.query ?? item.query;
+    case "openPage":
+      return action.url ?? item.query;
+    case "findInPage":
+      return [action.url, action.pattern].filter((part) => part !== null).join("\n");
+    case "other":
+      return item.query;
+  }
+}
+
+function isActiveTurnStatus(status: CodexAppServerTurn["status"]): boolean {
   return status === "inProgress"
     || status === "active"
     || status === "running"
@@ -157,50 +277,18 @@ function findActiveTurn(thread: CodexAppServerThread): CodexAppServerTurn | null
   return null;
 }
 
-export function buildCodexItemConversationMessages(input: {
-  item: CodexAppServerThreadItem;
+function buildCommandExecutionMessages(input: {
+  item: CodexAppServerCommandExecutionItem;
   turnId: string;
-  turnStatus: string;
   createdAt: string | null;
-  includeEmptyText?: boolean;
+  order: number;
 }): AgentsUiConversationMessage[] {
-  const { item, turnId, turnStatus, createdAt, includeEmptyText = false } = input;
-  if (isUserMessageItem(item)) {
-    const text = extractUserText(item);
-    if (text.length === 0 && !includeEmptyText) return [];
-    return [{
-      id: item.id,
-      turnId,
-      role: "user",
-      kind: "text",
-      text,
-      status: "completed",
-      createdAt,
-    }];
-  }
-
-  if (isAgentMessageItem(item)) {
-    const text = extractAgentText(item);
-    if (text.length === 0 && !includeEmptyText) return [];
-    const isThinking = item.phase === "analysis";
-    return [{
-      id: item.id,
-      turnId,
-      role: "assistant",
-      kind: isThinking ? "thinking" : "text",
-      phase: item.phase,
-      text,
-      status: isActiveTurnStatus(turnStatus) ? "inProgress" : "completed",
-      createdAt,
-    }];
-  }
-
-  if (!isCommandExecutionItem(item)) return [];
-
+  const { item, turnId, createdAt, order } = input;
   const status = commandExecutionStatus(item);
   const toolUse: AgentsUiConversationMessage = {
     id: item.id,
     turnId,
+    order,
     role: "assistant",
     kind: "toolUse",
     toolName: "shell",
@@ -221,6 +309,7 @@ export function buildCodexItemConversationMessages(input: {
     {
       id: `${item.id}:result`,
       turnId,
+      order: order + 1,
       role: "user",
       kind: "toolResult",
       toolName: "shell",
@@ -236,107 +325,219 @@ export function buildCodexItemConversationMessages(input: {
   ];
 }
 
-function compareMessagesByTimestamp(left: AgentsUiConversationMessage, right: AgentsUiConversationMessage): number {
-  if (!left.createdAt || !right.createdAt) return 0;
-  return Date.parse(left.createdAt) - Date.parse(right.createdAt);
-}
-
-function messageKind(message: AgentsUiConversationMessage): NonNullable<AgentsUiConversationMessage["kind"]> {
-  return message.kind ?? "text";
-}
-
-function normalizeMessageText(text: string): string {
-  return text.trim();
-}
-
-function sameOptionalValue(left: string | undefined, right: string | undefined): boolean {
-  return !left || !right || left === right;
-}
-
-function isSameLogicalMessage(left: AgentsUiConversationMessage, right: AgentsUiConversationMessage): boolean {
-  if (left.id === right.id) return true;
-  if (left.turnId !== right.turnId) return false;
-  if (left.role !== right.role) return false;
-  if (messageKind(left) !== messageKind(right)) return false;
-
-  const kind = messageKind(left);
-  if (kind === "toolUse") {
-    return normalizeMessageText(left.text) === normalizeMessageText(right.text)
-      && sameOptionalValue(left.cwd, right.cwd);
-  }
-
-  if (kind === "toolResult") {
-    return normalizeMessageText(left.text) === normalizeMessageText(right.text)
-      && sameOptionalValue(left.cwd, right.cwd);
-  }
-
-  return false;
-}
-
-function mergeMessageStatus(
-  left: AgentsUiConversationMessage["status"],
-  right: AgentsUiConversationMessage["status"],
-): AgentsUiConversationMessage["status"] {
-  if (left === "failed" || right === "failed") return "failed";
-  if (left === "inProgress" || right === "inProgress") return "inProgress";
-  return "completed";
-}
-
-function mergeMessageSources(
-  base: AgentsUiConversationMessage,
-  additional: AgentsUiConversationMessage,
-): AgentsUiConversationMessage {
-  const text = base.text.length >= additional.text.length ? base.text : additional.text;
-  return {
-    ...additional,
-    ...base,
-    text,
-    status: mergeMessageStatus(base.status, additional.status),
-    createdAt: base.createdAt ?? additional.createdAt,
-    command: base.command ?? additional.command,
-    cwd: base.cwd ?? additional.cwd,
-    exitCode: base.exitCode ?? additional.exitCode,
-    durationMs: base.durationMs ?? additional.durationMs,
+function buildFileChangeMessages(input: {
+  item: CodexAppServerFileChangeItem;
+  turnId: string;
+  createdAt: string | null;
+  order: number;
+}): AgentsUiConversationMessage[] {
+  const { item, turnId, createdAt, order } = input;
+  const status = toolStatus(item.status);
+  const toolUse: AgentsUiConversationMessage = {
+    id: item.id,
+    turnId,
+    order,
+    role: "assistant",
+    kind: "toolUse",
+    toolName: "file change",
+    toolCallId: item.id,
+    text: fileChangeDisplayText(item),
+    status,
+    createdAt,
   };
+  const resultText = fileChangeResultText(item);
+  if (resultText.length === 0) return [toolUse];
+
+  return [
+    toolUse,
+    {
+      id: `${item.id}:result`,
+      turnId,
+      order: order + 1,
+      role: "user",
+      kind: "toolResult",
+      toolName: "file change",
+      toolCallId: item.id,
+      text: resultText,
+      status,
+      createdAt,
+    },
+  ];
 }
 
-function mergeConversationMessages(
-  baseMessages: AgentsUiConversationMessage[],
-  additionalMessages: AgentsUiConversationMessage[],
-): AgentsUiConversationMessage[] {
-  if (additionalMessages.length === 0) return baseMessages;
+function buildMcpToolCallMessages(input: {
+  item: CodexAppServerMcpToolCallItem;
+  turnId: string;
+  createdAt: string | null;
+  order: number;
+}): AgentsUiConversationMessage[] {
+  const { item, turnId, createdAt, order } = input;
+  const status = item.error ? "failed" : toolStatus(item.status);
+  const toolName = `${item.server}.${item.tool}`;
+  const toolUse: AgentsUiConversationMessage = {
+    id: item.id,
+    turnId,
+    order,
+    role: "assistant",
+    kind: "toolUse",
+    toolName,
+    toolCallId: item.id,
+    text: jsonDisplayText(item.arguments),
+    status,
+    createdAt,
+    durationMs: item.durationMs,
+  };
+  const resultText = mcpToolResultText(item);
+  if (resultText.length === 0) return [toolUse];
 
-  const merged = [...baseMessages];
-  const matchedIndexes = new Set<number>();
-  for (const message of additionalMessages) {
-    const existingIndex = merged.findIndex((candidate, index) =>
-      !matchedIndexes.has(index) && isSameLogicalMessage(candidate, message)
-    );
-    if (existingIndex === -1) {
-      merged.push(message);
-    } else {
-      matchedIndexes.add(existingIndex);
-      merged[existingIndex] = mergeMessageSources(merged[existingIndex], message);
-    }
+  return [
+    toolUse,
+    {
+      id: `${item.id}:result`,
+      turnId,
+      order: order + 1,
+      role: "user",
+      kind: "toolResult",
+      toolName,
+      toolCallId: item.id,
+      text: resultText,
+      status,
+      createdAt,
+      durationMs: item.durationMs,
+    },
+  ];
+}
+
+function buildDynamicToolCallMessages(input: {
+  item: CodexAppServerDynamicToolCallItem;
+  turnId: string;
+  createdAt: string | null;
+  order: number;
+}): AgentsUiConversationMessage[] {
+  const { item, turnId, createdAt, order } = input;
+  const status = item.success === false ? "failed" : toolStatus(item.status);
+  const toolName = dynamicToolName(item);
+  const toolUse: AgentsUiConversationMessage = {
+    id: item.id,
+    turnId,
+    order,
+    role: "assistant",
+    kind: "toolUse",
+    toolName,
+    toolCallId: item.id,
+    text: jsonDisplayText(item.arguments),
+    status,
+    createdAt,
+    durationMs: item.durationMs,
+  };
+  const resultText = dynamicToolResultText(item);
+  if (resultText.length === 0) return [toolUse];
+
+  return [
+    toolUse,
+    {
+      id: `${item.id}:result`,
+      turnId,
+      order: order + 1,
+      role: "user",
+      kind: "toolResult",
+      toolName,
+      toolCallId: item.id,
+      text: resultText,
+      status,
+      createdAt,
+      durationMs: item.durationMs,
+    },
+  ];
+}
+
+function buildWebSearchMessages(input: {
+  item: CodexAppServerWebSearchItem;
+  turnId: string;
+  createdAt: string | null;
+  order: number;
+}): AgentsUiConversationMessage[] {
+  const { item, turnId, createdAt, order } = input;
+  return [{
+    id: item.id,
+    turnId,
+    order,
+    role: "assistant",
+    kind: "toolUse",
+    toolName: "web search",
+    toolCallId: item.id,
+    text: webSearchDisplayText(item),
+    status: "completed",
+    createdAt,
+  }];
+}
+
+export function buildCodexItemConversationMessages(input: {
+  item: CodexAppServerThreadItem;
+  turnId: string;
+  turnStatus: CodexAppServerTurn["status"];
+  createdAt: string | null;
+  order: number;
+  includeEmptyText?: boolean;
+}): AgentsUiConversationMessage[] {
+  const { item, turnId, turnStatus, createdAt, order, includeEmptyText = false } = input;
+  if (isUserMessageItem(item)) {
+    const text = extractUserText(item);
+    if (text.length === 0 && !includeEmptyText) return [];
+    return [{
+      id: item.id,
+      turnId,
+      order,
+      role: "user",
+      kind: "text",
+      text,
+      status: "completed",
+      createdAt,
+    }];
   }
 
-  return merged
-    .map((message, index) => ({ message, index }))
-    .sort((left, right) => compareMessagesByTimestamp(left.message, right.message) || left.index - right.index)
-    .map(({ message }) => message);
+  if (isAgentMessageItem(item)) {
+    const text = extractAgentText(item);
+    if (text.length === 0 && !includeEmptyText) return [];
+    const phase = item.phase ?? undefined;
+    const isThinking = phase === "analysis";
+    return [{
+      id: item.id,
+      turnId,
+      order,
+      role: "assistant",
+      kind: isThinking ? "thinking" : "text",
+      phase,
+      text,
+      status: isActiveTurnStatus(turnStatus) ? "inProgress" : "completed",
+      createdAt,
+    }];
+  }
+
+  if (isCommandExecutionItem(item)) return buildCommandExecutionMessages({ item, turnId, createdAt, order });
+  if (isFileChangeItem(item)) return buildFileChangeMessages({ item, turnId, createdAt, order });
+  if (isMcpToolCallItem(item)) return buildMcpToolCallMessages({ item, turnId, createdAt, order });
+  if (isDynamicToolCallItem(item)) return buildDynamicToolCallMessages({ item, turnId, createdAt, order });
+  if (isWebSearchItem(item)) return buildWebSearchMessages({ item, turnId, createdAt, order });
+
+  return [];
 }
 
 function buildConversationMessages(thread: CodexAppServerThread): AgentsUiConversationMessage[] {
   const messages: AgentsUiConversationMessage[] = [];
+  let order = 0;
 
   for (const turn of thread.turns) {
     for (const item of turn.items) {
-      messages.push(...buildCodexItemConversationMessages({
+      const itemMessages = buildCodexItemConversationMessages({
         item,
         turnId: turn.id,
         turnStatus: turn.status,
         createdAt: toIsoTimestamp(isUserMessageItem(item) ? turn.startedAt : turn.completedAt ?? turn.startedAt),
-      }));
+        order,
+      });
+      messages.push(...itemMessages);
+      order += itemMessages.length;
     }
   }
 
@@ -345,16 +546,17 @@ function buildConversationMessages(thread: CodexAppServerThread): AgentsUiConver
 
 export function buildConversationState(
   thread: CodexAppServerThread,
-  additionalMessages: AgentsUiConversationMessage[] = [],
+  sessionMessages: AgentsUiConversationMessage[] = [],
 ): AgentsUiConversationState {
   const activeTurn = findActiveTurn(thread);
+  const messages = sessionMessages.length > 0 ? sessionMessages : buildConversationMessages(thread);
   return {
     provider: "codexAppServer",
     conversationId: thread.id,
     cwd: thread.cwd,
     running: thread.status.type === "active" || activeTurn !== null,
     activeTurnId: activeTurn?.id ?? null,
-    messages: mergeConversationMessages(buildConversationMessages(thread), additionalMessages),
+    messages,
   };
 }
 
@@ -385,17 +587,17 @@ function toWorktreeConversationResponse(
   worktree: WorktreeSnapshot,
   conversationMeta: WorktreeConversationMeta,
   thread: CodexAppServerThread,
-  additionalMessages: AgentsUiConversationMessage[],
+  sessionMessages: AgentsUiConversationMessage[],
 ): AgentsUiWorktreeConversationResponse {
   return {
     worktree: buildAgentsUiWorktreeSummary(worktree, conversationMeta),
-    conversation: buildConversationState(thread, additionalMessages),
+    conversation: buildConversationState(thread, sessionMessages),
   };
 }
 
 export class WorktreeConversationService {
   private readonly now: () => Date;
-  private readonly readSessionMessages;
+  private readonly readSessionMessages: (thread: CodexAppServerThread) => Promise<AgentsUiConversationMessage[]>;
   private readonly readMeta;
   private readonly writeMeta;
 

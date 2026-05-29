@@ -48,10 +48,14 @@ function renderPanel({
   worktree = createWorktree(),
   conversation = createConversation(),
   conversationError = null,
+  composerText = "",
+  isSending = false,
 }: {
   worktree?: WorktreeInfo;
   conversation?: AgentsUiConversationState | null;
   conversationError?: string | null;
+  composerText?: string;
+  isSending?: boolean;
 } = {}) {
   const onInterrupt = vi.fn();
 
@@ -61,8 +65,8 @@ function renderPanel({
       conversation,
       conversationError,
       conversationLoading: false,
-      composerText: "",
-      isSending: false,
+      composerText,
+      isSending,
       onAttach: vi.fn(),
       onComposerInput: vi.fn(),
       onInterrupt,
@@ -93,6 +97,13 @@ describe("WorktreeConversationPanel", () => {
 
     await fireEvent.click(interruptButton);
     expect(onInterrupt).toHaveBeenCalledTimes(1);
+  });
+
+  it("does not show the old status header above the transcript", () => {
+    renderPanel();
+
+    expect(screen.queryByText("Ready")).not.toBeInTheDocument();
+    expect(screen.queryByText("Claude")).not.toBeInTheDocument();
   });
 
   it("keeps the interrupt button inside the error banner when the conversation is running", () => {
@@ -131,6 +142,7 @@ describe("WorktreeConversationPanel", () => {
           {
             id: "thinking-1",
             turnId: "turn-1",
+            order: 0,
             role: "assistant",
             kind: "thinking",
             text: "I will inspect the directory.",
@@ -140,6 +152,7 @@ describe("WorktreeConversationPanel", () => {
           {
             id: "call-1",
             turnId: "turn-1",
+            order: 1,
             role: "assistant",
             kind: "toolUse",
             toolName: "shell",
@@ -154,6 +167,7 @@ describe("WorktreeConversationPanel", () => {
           {
             id: "call-1:result",
             turnId: "turn-1",
+            order: 2,
             role: "user",
             kind: "toolResult",
             toolCallId: "call-1",
@@ -168,14 +182,15 @@ describe("WorktreeConversationPanel", () => {
     expect(screen.getByText("Thinking")).toBeInTheDocument();
     expect(screen.getByText("I will inspect the directory.")).toBeInTheDocument();
     expect(screen.getByText("Completed shell")).toBeInTheDocument();
-    expect(screen.getByText("ls")).toBeInTheDocument();
+    expect(screen.getAllByText("ls")).toHaveLength(2);
     expect(screen.getByText("Output")).toBeInTheDocument();
     expect(screen.getByText("README.md")).toBeInTheDocument();
     expect(screen.queryByText("/repo/__worktrees/feature/mobile-chat")).not.toBeInTheDocument();
 
-    const toolBlock = screen.getByText("Completed shell").closest("div")?.parentElement;
+    const toolBlock = screen.getByText("Completed shell").closest("details");
     expect(toolBlock).toHaveTextContent("ls");
     expect(toolBlock).toHaveTextContent("README.md");
+    expect(toolBlock?.querySelector("details")).toBeNull();
   });
 
   it("shows a processing indicator before visible progress arrives", () => {
@@ -190,6 +205,46 @@ describe("WorktreeConversationPanel", () => {
     expect(screen.getByText("Claude is processing")).toBeInTheDocument();
   });
 
+  it("shows a processing indicator while a Codex send is pending", () => {
+    renderPanel({
+      worktree: createWorktree({ agentName: "codex", agentLabel: "Codex" }),
+      conversation: createConversation({
+        provider: "codexAppServer",
+        conversationId: "thread-1",
+      }),
+      composerText: "Ship it",
+      isSending: true,
+    });
+
+    expect(screen.getByText("Codex is processing")).toBeInTheDocument();
+  });
+
+  it("keeps the processing indicator while the interrupt button is visible", () => {
+    renderPanel({
+      worktree: createWorktree({ agentName: "codex", agentLabel: "Codex" }),
+      conversation: createConversation({
+        provider: "codexAppServer",
+        running: true,
+        activeTurnId: "turn-1",
+        messages: [
+          {
+            id: "assistant-1",
+            turnId: "turn-1",
+            order: 0,
+            role: "assistant",
+            kind: "text",
+            text: "I am checking the files.",
+            status: "inProgress",
+            createdAt: null,
+          },
+        ],
+      }),
+    });
+
+    expect(screen.getByRole("button", { name: "Interrupt" })).toBeInTheDocument();
+    expect(screen.getByText("Codex is processing")).toBeInTheDocument();
+  });
+
   it("does not render blank assistant bubbles for empty streamed starts", () => {
     renderPanel({
       worktree: createWorktree({ agentName: "codex", agentLabel: "Codex" }),
@@ -201,6 +256,7 @@ describe("WorktreeConversationPanel", () => {
           {
             id: "assistant-empty",
             turnId: "turn-1",
+            order: 0,
             role: "assistant",
             kind: "text",
             text: "",
@@ -213,5 +269,32 @@ describe("WorktreeConversationPanel", () => {
 
     expect(screen.getByText("Codex is processing")).toBeInTheDocument();
     expect(screen.queryByText("typing")).not.toBeInTheDocument();
+  });
+
+  it("keeps the processing indicator for empty Codex tool starts", () => {
+    renderPanel({
+      worktree: createWorktree({ agentName: "codex", agentLabel: "Codex" }),
+      conversation: createConversation({
+        provider: "codexAppServer",
+        running: true,
+        activeTurnId: "turn-1",
+        messages: [
+          {
+            id: "call-1",
+            turnId: "turn-1",
+            order: 0,
+            role: "assistant",
+            kind: "toolUse",
+            toolName: "shell",
+            toolCallId: "call-1",
+            text: "",
+            status: "inProgress",
+            createdAt: null,
+          },
+        ],
+      }),
+    });
+
+    expect(screen.getByText("Codex is processing")).toBeInTheDocument();
   });
 });

@@ -414,11 +414,12 @@ export const AgentsUiConversationMessageKindSchema = z.enum(["text", "thinking",
 export const AgentsUiConversationMessageSchema = z.object({
   id: z.string(),
   turnId: z.string(),
+  order: z.number().int().nonnegative(),
   role: AgentsUiConversationMessageRoleSchema,
   text: z.string(),
   status: AgentsUiConversationMessageStatusSchema,
   createdAt: z.string().nullable(),
-  kind: AgentsUiConversationMessageKindSchema.optional(),
+  kind: AgentsUiConversationMessageKindSchema,
   phase: z.string().optional(),
   toolName: z.string().optional(),
   toolCallId: z.string().optional(),
@@ -454,18 +455,13 @@ export const AgentsUiInterruptResponseSchema = z.object({
   interrupted: z.literal(true),
 });
 
-export const AgentsUiConversationSnapshotEventSchema = z.object({
-  type: z.literal("snapshot"),
-  revision: z.number().int().nonnegative(),
-  data: AgentsUiWorktreeConversationResponseSchema,
-});
-
 export const AgentsUiConversationMessageDeltaEventSchema = z.object({
   type: z.literal("messageDelta"),
   revision: z.number().int().nonnegative(),
   conversationId: z.string(),
   turnId: z.string(),
   itemId: z.string(),
+  order: z.number().int().nonnegative(),
   delta: z.string(),
 });
 
@@ -476,15 +472,23 @@ export const AgentsUiConversationMessageUpsertEventSchema = z.object({
   message: AgentsUiConversationMessageSchema,
 });
 
+export const AgentsUiConversationStatusEventSchema = z.object({
+  type: z.literal("conversationStatus"),
+  revision: z.number().int().nonnegative(),
+  conversationId: z.string(),
+  running: z.boolean(),
+  activeTurnId: z.string().nullable(),
+});
+
 export const AgentsUiConversationErrorEventSchema = z.object({
   type: z.literal("error"),
   message: z.string(),
 });
 
 export const AgentsUiConversationEventSchema = z.discriminatedUnion("type", [
-  AgentsUiConversationSnapshotEventSchema,
   AgentsUiConversationMessageDeltaEventSchema,
   AgentsUiConversationMessageUpsertEventSchema,
+  AgentsUiConversationStatusEventSchema,
   AgentsUiConversationErrorEventSchema,
 ]);
 
@@ -634,9 +638,9 @@ export type AgentsUiConversationState = z.infer<typeof AgentsUiConversationState
 export type AgentsUiWorktreeConversationResponse = z.infer<typeof AgentsUiWorktreeConversationResponseSchema>;
 export type AgentsUiSendMessageResponse = z.infer<typeof AgentsUiSendMessageResponseSchema>;
 export type AgentsUiInterruptResponse = z.infer<typeof AgentsUiInterruptResponseSchema>;
-export type AgentsUiConversationSnapshotEvent = z.infer<typeof AgentsUiConversationSnapshotEventSchema>;
 export type AgentsUiConversationMessageDeltaEvent = z.infer<typeof AgentsUiConversationMessageDeltaEventSchema>;
 export type AgentsUiConversationMessageUpsertEvent = z.infer<typeof AgentsUiConversationMessageUpsertEventSchema>;
+export type AgentsUiConversationStatusEvent = z.infer<typeof AgentsUiConversationStatusEventSchema>;
 export type AgentsUiConversationErrorEvent = z.infer<typeof AgentsUiConversationErrorEventSchema>;
 export type AgentsUiConversationEvent = z.infer<typeof AgentsUiConversationEventSchema>;
 export type WorktreeListResponse = z.infer<typeof WorktreeListResponseSchema>;

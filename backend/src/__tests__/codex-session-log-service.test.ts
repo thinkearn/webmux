@@ -1,167 +1,117 @@
 import { describe, expect, it } from "bun:test";
-import type { CodexAppServerThread } from "../adapters/codex-app-server";
-import { readCodexSessionMessages } from "../services/codex-session-log-service";
+import { parseCodexSessionMessages } from "../services/codex-session-log-service";
 
-function makeThread(path: string | null): CodexAppServerThread {
-  return {
-    id: "thread-1",
-    forkedFromId: null,
-    preview: "",
-    ephemeral: false,
-    modelProvider: "openai",
-    createdAt: 100,
-    updatedAt: 200,
-    status: { type: "idle" },
-    path,
-    cwd: "/tmp/worktree",
-    cliVersion: "0.134.0",
-    source: "vscode",
-    agentNickname: null,
-    agentRole: null,
-    gitInfo: null,
-    name: null,
-    turns: [],
-  };
+function line(timestamp: string, type: string, payload: Record<string, unknown>): string {
+  return JSON.stringify({ timestamp, type, payload });
 }
 
 describe("codex-session-log-service", () => {
-  it("extracts reasoning summaries and persisted tool calls from Codex JSONL", async () => {
-    const path = `/tmp/webmux-codex-session-${crypto.randomUUID()}.jsonl`;
-    await Bun.write(path, [
-      JSON.stringify({
-        timestamp: "2026-05-28T10:00:00.000Z",
-        type: "event_msg",
-        payload: { type: "task_started", turn_id: "turn-1" },
+  it("parses visible JSONL transcript messages and tool calls in log order", () => {
+    const text = [
+      line("2026-05-29T10:00:00.000Z", "event_msg", {
+        type: "task_started",
+        turn_id: "turn-1",
       }),
-      JSON.stringify({
-        timestamp: "2026-05-28T10:00:01.000Z",
-        type: "response_item",
-        payload: {
-          type: "reasoning",
-          summary: [{ text: "Need inspect files first." }],
-          encrypted_content: "hidden",
-        },
+      line("2026-05-29T10:00:01.000Z", "event_msg", {
+        type: "user_message",
+        message: "Inspect the repo",
       }),
-      JSON.stringify({
-        timestamp: "2026-05-28T10:00:02.000Z",
-        type: "response_item",
-        payload: {
-          type: "message",
-          role: "assistant",
-          phase: "commentary",
-          content: [{ type: "output_text", text: "I will list the directory." }],
-        },
+      line("2026-05-29T10:00:02.000Z", "event_msg", {
+        type: "user_message",
+        message: "Inspect the repo",
       }),
-      JSON.stringify({
-        timestamp: "2026-05-28T10:00:03.000Z",
-        type: "response_item",
-        payload: {
-          type: "function_call",
-          name: "exec_command",
-          arguments: JSON.stringify({ cmd: "test -f /tmp/nope", workdir: "/tmp/worktree" }),
-          call_id: "call-1",
-        },
+      line("2026-05-29T10:00:03.000Z", "event_msg", {
+        type: "agent_message",
+        phase: "commentary",
+        message: "I will list files.",
       }),
-      JSON.stringify({
-        timestamp: "2026-05-28T10:00:04.000Z",
-        type: "response_item",
-        payload: {
-          type: "function_call_output",
-          call_id: "call-1",
-          output: "Chunk ID: abc\nWall time: 0.0000 seconds\nProcess exited with code 1\nOriginal token count: 0\nOutput:\n",
-        },
+      line("2026-05-29T10:00:04.000Z", "response_item", {
+        type: "function_call",
+        name: "exec_command",
+        call_id: "call-1",
+        arguments: JSON.stringify({
+          cmd: "ls",
+          workdir: "/tmp/worktree",
+        }),
       }),
-      JSON.stringify({
-        timestamp: "2026-05-28T10:00:05.000Z",
-        type: "response_item",
-        payload: {
-          type: "custom_tool_call",
-          status: "completed",
-          name: "apply_patch",
-          input: "*** Begin Patch\n*** Update File: missing.ts\n@@\n*** End Patch\n",
-          call_id: "call-2",
-        },
+      line("2026-05-29T10:00:05.000Z", "response_item", {
+        type: "function_call_output",
+        call_id: "call-1",
+        output: "README.md\nProcess exited with code 0\n",
       }),
-      JSON.stringify({
-        timestamp: "2026-05-28T10:00:06.000Z",
-        type: "response_item",
-        payload: {
-          type: "custom_tool_call_output",
-          call_id: "call-2",
-          output: "apply_patch verification failed: Failed to find expected lines in missing.ts",
-        },
+      line("2026-05-29T10:00:06.000Z", "event_msg", {
+        type: "agent_message",
+        phase: "final_answer",
+        message: "Done.",
       }),
-      JSON.stringify({
-        timestamp: "2026-05-28T10:00:07.000Z",
-        type: "event_msg",
-        payload: { type: "task_complete", turn_id: "turn-1" },
+      line("2026-05-29T10:00:07.000Z", "event_msg", {
+        type: "task_complete",
+        turn_id: "turn-1",
       }),
-    ].join("\n"));
+    ].join("\n");
 
-    expect(await readCodexSessionMessages(makeThread(path))).toEqual([
+    expect(parseCodexSessionMessages(text)).toEqual([
       {
-        id: "reasoning:turn-1:0",
+        id: "user:turn-1:0",
         turnId: "turn-1",
-        role: "assistant",
-        kind: "thinking",
-        phase: "analysis",
-        text: "Need inspect files first.",
+        order: 0,
+        role: "user",
+        kind: "text",
+        text: "Inspect the repo",
         status: "completed",
-        createdAt: "2026-05-28T10:00:01.000Z",
+        createdAt: "2026-05-29T10:00:01.000Z",
+      },
+      {
+        id: "assistant:turn-1:1",
+        turnId: "turn-1",
+        order: 1,
+        role: "assistant",
+        kind: "text",
+        phase: "commentary",
+        text: "I will list files.",
+        status: "completed",
+        createdAt: "2026-05-29T10:00:03.000Z",
       },
       {
         id: "call-1",
         turnId: "turn-1",
+        order: 2,
         role: "assistant",
         kind: "toolUse",
         toolName: "exec_command",
         toolCallId: "call-1",
-        text: "test -f /tmp/nope",
-        command: "test -f /tmp/nope",
+        text: "ls",
+        command: "ls",
         cwd: "/tmp/worktree",
-        status: "failed",
-        createdAt: "2026-05-28T10:00:03.000Z",
-        exitCode: 1,
+        status: "completed",
+        createdAt: "2026-05-29T10:00:04.000Z",
+        exitCode: 0,
       },
       {
         id: "call-1:result",
         turnId: "turn-1",
+        order: 3,
         role: "user",
         kind: "toolResult",
         toolName: "exec_command",
         toolCallId: "call-1",
-        text: "Chunk ID: abc\nWall time: 0.0000 seconds\nProcess exited with code 1\nOriginal token count: 0\nOutput:",
-        command: "test -f /tmp/nope",
+        text: "README.md\nProcess exited with code 0",
+        command: "ls",
         cwd: "/tmp/worktree",
-        status: "failed",
-        createdAt: "2026-05-28T10:00:04.000Z",
-        exitCode: 1,
+        status: "completed",
+        createdAt: "2026-05-29T10:00:05.000Z",
+        exitCode: 0,
       },
       {
-        id: "call-2",
+        id: "assistant:turn-1:4",
         turnId: "turn-1",
+        order: 4,
         role: "assistant",
-        kind: "toolUse",
-        toolName: "apply_patch",
-        toolCallId: "call-2",
-        text: "apply_patch",
-        command: "apply_patch",
-        status: "failed",
-        createdAt: "2026-05-28T10:00:05.000Z",
-        exitCode: null,
-      },
-      {
-        id: "call-2:result",
-        turnId: "turn-1",
-        role: "user",
-        kind: "toolResult",
-        toolName: "apply_patch",
-        toolCallId: "call-2",
-        text: "apply_patch verification failed: Failed to find expected lines in missing.ts",
-        command: "apply_patch",
-        status: "failed",
-        createdAt: "2026-05-28T10:00:06.000Z",
-        exitCode: null,
+        kind: "text",
+        phase: "final_answer",
+        text: "Done.",
+        status: "completed",
+        createdAt: "2026-05-29T10:00:06.000Z",
       },
     ]);
   });

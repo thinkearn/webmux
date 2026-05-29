@@ -111,6 +111,32 @@ function readOutputStatus(output: string): AgentsUiConversationMessage["status"]
   return output.startsWith("apply_patch verification failed") ? "failed" : "completed";
 }
 
+function pushMessage(
+  messages: AgentsUiConversationMessage[],
+  message: Omit<AgentsUiConversationMessage, "order">,
+): void {
+  messages.push({
+    ...message,
+    order: messages.length,
+  });
+}
+
+function hasDuplicateTextMessage(input: {
+  messages: AgentsUiConversationMessage[];
+  turnId: string;
+  role: AgentsUiConversationMessage["role"];
+  text: string;
+  phase?: string;
+}): boolean {
+  return input.messages.some((message) =>
+    message.turnId === input.turnId
+    && message.role === input.role
+    && message.kind === "text"
+    && message.text === input.text
+    && message.phase === input.phase
+  );
+}
+
 function finalizeToolStatuses(messages: AgentsUiConversationMessage[]): AgentsUiConversationMessage[] {
   const resultByCallId = new Map<string, AgentsUiConversationMessage>();
   for (const message of messages) {
@@ -132,18 +158,7 @@ function finalizeToolStatuses(messages: AgentsUiConversationMessage[]): AgentsUi
   });
 }
 
-export async function readCodexSessionMessages(thread: CodexAppServerThread): Promise<AgentsUiConversationMessage[]> {
-  if (!thread.path) return [];
-
-  let text: string;
-  try {
-    const file = Bun.file(thread.path);
-    if (!await file.exists()) return [];
-    text = await file.text();
-  } catch {
-    return [];
-  }
-
+export function parseCodexSessionMessages(text: string): AgentsUiConversationMessage[] {
   const messages: AgentsUiConversationMessage[] = [];
   const toolCallMetadata = new Map<string, ToolCallMetadata>();
   let currentTurnId: string | null = null;
@@ -161,9 +176,43 @@ export async function readCodexSessionMessages(thread: CodexAppServerThread): Pr
       if (eventType === "task_started") {
         currentTurnId = readString(record.payload.turn_id);
         blockIndex = 0;
+        continue;
       }
-      if (eventType === "task_complete") {
+      if (eventType === "task_complete" || eventType === "turn_aborted") {
         currentTurnId = null;
+        continue;
+      }
+      if (eventType === "user_message" && currentTurnId) {
+        const text = readString(record.payload.message);
+        if (!text || hasDuplicateTextMessage({ messages, turnId: currentTurnId, role: "user", text })) continue;
+        pushMessage(messages, {
+          id: `user:${currentTurnId}:${blockIndex}`,
+          turnId: currentTurnId,
+          role: "user",
+          kind: "text",
+          text,
+          status: "completed",
+          createdAt: record.timestamp,
+        });
+        blockIndex += 1;
+        continue;
+      }
+      if (eventType === "agent_message" && currentTurnId) {
+        const text = readString(record.payload.message);
+        if (!text) continue;
+        const phase = readString(record.payload.phase) ?? undefined;
+        if (hasDuplicateTextMessage({ messages, turnId: currentTurnId, role: "assistant", text, phase })) continue;
+        pushMessage(messages, {
+          id: `assistant:${currentTurnId}:${blockIndex}`,
+          turnId: currentTurnId,
+          role: "assistant",
+          kind: phase === "analysis" ? "thinking" : "text",
+          ...(phase ? { phase } : {}),
+          text,
+          status: "completed",
+          createdAt: record.timestamp,
+        });
+        blockIndex += 1;
       }
       continue;
     }
@@ -174,7 +223,7 @@ export async function readCodexSessionMessages(thread: CodexAppServerThread): Pr
     if (payloadType === "reasoning") {
       const summary = readReasoningSummary(record.payload.summary);
       if (summary.length === 0) continue;
-      messages.push({
+      pushMessage(messages, {
         id: `reasoning:${currentTurnId}:${blockIndex}`,
         turnId: currentTurnId,
         role: "assistant",
@@ -202,7 +251,7 @@ export async function readCodexSessionMessages(thread: CodexAppServerThread): Pr
         ...(command ? { command } : {}),
         ...(cwd ? { cwd } : {}),
       });
-      messages.push({
+      pushMessage(messages, {
         id: callId,
         turnId: currentTurnId,
         role: "assistant",
@@ -227,7 +276,7 @@ export async function readCodexSessionMessages(thread: CodexAppServerThread): Pr
         ? record.payload.output.trimEnd()
         : compactJson(record.payload.output ?? "");
       const exitCode = readOutputExitCode(output);
-      messages.push({
+      pushMessage(messages, {
         id: `${callId}:result`,
         turnId: currentTurnId,
         role: "user",
@@ -246,4 +295,16 @@ export async function readCodexSessionMessages(thread: CodexAppServerThread): Pr
   }
 
   return finalizeToolStatuses(messages);
+}
+
+export async function readCodexSessionMessages(thread: CodexAppServerThread): Promise<AgentsUiConversationMessage[]> {
+  if (!thread.path) return [];
+
+  try {
+    const file = Bun.file(thread.path);
+    if (!await file.exists()) return [];
+    return parseCodexSessionMessages(await file.text());
+  } catch {
+    return [];
+  }
 }
