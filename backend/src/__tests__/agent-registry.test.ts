@@ -44,7 +44,7 @@ const TEST_CONFIG: ProjectConfig = {
 
 describe("agent-registry", () => {
   it("lists built-in agents before local custom agents", () => {
-    expect(listAgentDefinitions(TEST_CONFIG).map((agent) => agent.id)).toEqual(["claude", "codex", "gemini"]);
+    expect(listAgentDefinitions(TEST_CONFIG).map((agent) => agent.id)).toEqual(["claude", "codex", "codebuddy", "gemini"]);
   });
 
   it("exposes custom agents as terminal-only summaries", () => {
@@ -64,6 +64,18 @@ describe("agent-registry", () => {
       {
         id: "codex",
         label: "Codex",
+        kind: "builtin",
+        capabilities: {
+          terminal: true,
+          inAppChat: true,
+          conversationHistory: true,
+          interrupt: true,
+          resume: true,
+        },
+      },
+      {
+        id: "codebuddy",
+        label: "CodeBuddy",
         kind: "builtin",
         capabilities: {
           terminal: true,
@@ -100,7 +112,7 @@ describe("agent-registry", () => {
       },
     });
 
-    expect(definitions.map((agent) => agent.id)).toEqual(["claude", "codex", "gemini"]);
+    expect(definitions.map((agent) => agent.id)).toEqual(["claude", "codex", "codebuddy", "gemini"]);
     expect(definitions[0]?.label).toBe("Claude");
   });
 
@@ -134,6 +146,20 @@ describe("agent-registry", () => {
       {
         id: "codex",
         label: "Codex",
+        kind: "builtin",
+        capabilities: {
+          terminal: true,
+          inAppChat: true,
+          conversationHistory: true,
+          interrupt: true,
+          resume: true,
+        },
+        startCommand: null,
+        resumeCommand: null,
+      },
+      {
+        id: "codebuddy",
+        label: "CodeBuddy",
         kind: "builtin",
         capabilities: {
           terminal: true,

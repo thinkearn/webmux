@@ -58,6 +58,29 @@ describe("buildInitAgentCommand", () => {
     expect(command.args).toContain("developer_instructions=system");
     expect(command.args.at(-1)).toBe("user");
   });
+
+  it("builds the CodeBuddy non-interactive command", () => {
+    expect(buildInitAgentCommand("codebuddy", prompt)).toEqual({
+      agent: "codebuddy",
+      cmd: "codebuddy",
+      args: [
+        "-p",
+        "--verbose",
+        "--permission-mode",
+        "bypassPermissions",
+        "--model",
+        "claude-haiku-4.5",
+        "--effort",
+        "low",
+        "--output-format",
+        "stream-json",
+        "--include-partial-messages",
+        "--append-system-prompt",
+        "system",
+        "user",
+      ],
+    });
+  });
 });
 
 describe("parseInitAgentStreamLine", () => {

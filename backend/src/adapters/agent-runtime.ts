@@ -254,6 +254,7 @@ if __name__ == "__main__":
 export interface AgentRuntimeArtifacts {
   agentCtlPath: string;
   claudeSettingsPath: string;
+  codebuddySettingsPath: string;
   codexHooksPath: string;
 }
 
@@ -508,10 +509,12 @@ export async function ensureAgentRuntimeArtifacts(input: {
   const artifacts: AgentRuntimeArtifacts = {
     agentCtlPath: join(storagePaths.webmuxDir, "webmux-agentctl"),
     claudeSettingsPath: join(input.worktreePath, ".claude", "settings.local.json"),
+    codebuddySettingsPath: join(input.worktreePath, ".codebuddy", "settings.local.json"),
     codexHooksPath: join(input.worktreePath, ".codex", "hooks.json"),
   };
 
   await mkdir(dirname(artifacts.claudeSettingsPath), { recursive: true });
+  await mkdir(dirname(artifacts.codebuddySettingsPath), { recursive: true });
   await mkdir(dirname(artifacts.codexHooksPath), { recursive: true });
 
   await Bun.write(artifacts.agentCtlPath, buildAgentCtlScript());
@@ -523,6 +526,7 @@ export async function ensureAgentRuntimeArtifacts(input: {
     throw new Error("Invalid Claude hook settings");
   }
   await mergeClaudeSettings(artifacts.claudeSettingsPath, hooks);
+  await mergeClaudeSettings(artifacts.codebuddySettingsPath, hooks);
   await ensureGeneratedCodexHooksIgnored(input.gitDir);
   await mergeCodexHooksFile(artifacts.codexHooksPath, buildCodexHookSettings(artifacts).hooks, artifacts.agentCtlPath);
 

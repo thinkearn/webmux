@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { detectProjectName, run } from "./shared.ts";
 
-export type InitAuthoringChoice = "claude" | "codex" | "manual";
+export type InitAuthoringChoice = "claude" | "codex" | "codebuddy" | "manual";
 export type InitAgent = Exclude<InitAuthoringChoice, "manual">;
 export type InitPackageManager = "bun" | "npm" | "pnpm" | "yarn";
 
@@ -50,6 +50,8 @@ interface InitAgentStreamState {
 
 const FAST_CLAUDE_MODEL = "haiku";
 const FAST_CLAUDE_EFFORT = "low";
+const FAST_CODEBUDDY_MODEL = "claude-haiku-4.5";
+const FAST_CODEBUDDY_EFFORT = "low";
 const FAST_CODEX_MODEL = "gpt-5.1-codex";
 const FAST_CODEX_REASONING = "low";
 
@@ -160,6 +162,29 @@ export function buildInitAgentCommand(
         FAST_CLAUDE_MODEL,
         "--effort",
         FAST_CLAUDE_EFFORT,
+        "--output-format",
+        "stream-json",
+        "--include-partial-messages",
+        "--append-system-prompt",
+        prompt.systemPrompt,
+        prompt.userPrompt,
+      ],
+    };
+  }
+
+  if (agent === "codebuddy") {
+    return {
+      agent,
+      cmd: "codebuddy",
+      args: [
+        "-p",
+        "--verbose",
+        "--permission-mode",
+        "bypassPermissions",
+        "--model",
+        FAST_CODEBUDDY_MODEL,
+        "--effort",
+        FAST_CODEBUDDY_EFFORT,
         "--output-format",
         "stream-json",
         "--include-partial-messages",
@@ -423,7 +448,9 @@ export function parseInitAgentStreamLine(
   }
 
   if (!isRecord(parsed)) return [];
-  return agent === "claude" ? parseClaudeStreamLine(parsed, state) : parseCodexStreamLine(parsed, state);
+  return agent === "claude" || agent === "codebuddy"
+    ? parseClaudeStreamLine(parsed, state)
+    : parseCodexStreamLine(parsed, state);
 }
 
 async function consumeStructuredStream(
@@ -706,7 +733,7 @@ startupEnvs:
 #   # Provider used for automatic branch naming.
 #   provider: ${defaultAgent}
 #   # Model used for automatic branch naming.
-#   model: ${defaultAgent === "codex" ? "gpt-5.1-codex" : "claude-3-5-haiku-latest"}
+#   model: ${defaultAgent === "codex" ? "gpt-5.1-codex" : defaultAgent === "codebuddy" ? "claude-haiku-4.5" : "claude-3-5-haiku-latest"}
 #   # Prompt that tells the model how to name branches.
 #   system_prompt: >
 #     Generate a short kebab-case git branch name.

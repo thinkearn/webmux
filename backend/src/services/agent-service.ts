@@ -26,7 +26,7 @@ function buildDockerRuntimeBootstrap(runtimeEnvPath: string): string {
 }
 
 function buildBuiltInAgentInvocation(input: {
-  agent: "claude" | "codex";
+  agent: "claude" | "codex" | "codebuddy";
   yolo?: boolean;
   systemPrompt?: string;
   prompt?: string;
@@ -50,17 +50,16 @@ function buildBuiltInAgentInvocation(input: {
     return `codex${hooksFlag}${yoloFlag}${promptSuffix}`;
   }
 
+  // claude and codebuddy share the same CLI interface
+  const cli = input.agent === "codebuddy" ? "codebuddy" : "claude";
   const yoloFlag = input.yolo ? " --dangerously-skip-permissions" : "";
   if (input.launchMode === "resume") {
-    // `claude --continue <prompt>` resumes the session AND submits the prompt
-    // as the first new turn, avoiding the tmux paste/Enter race that hits
-    // Claude's TUI before its input loop is ready.
-    return `claude${yoloFlag} --continue${promptSuffix}`;
+    return `${cli}${yoloFlag} --continue${promptSuffix}`;
   }
   if (input.systemPrompt) {
-    return `claude${yoloFlag} --append-system-prompt ${quoteShell(input.systemPrompt)}${promptSuffix}`;
+    return `${cli}${yoloFlag} --append-system-prompt ${quoteShell(input.systemPrompt)}${promptSuffix}`;
   }
-  return `claude${yoloFlag}${promptSuffix}`;
+  return `${cli}${yoloFlag}${promptSuffix}`;
 }
 
 function renderCustomCommandTemplate(template: string): string {

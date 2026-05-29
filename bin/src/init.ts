@@ -31,6 +31,7 @@ const deps: Dep[] = [
   { tool: "gh", required: false, hint: "brew install gh  then  gh auth login" },
   { tool: "claude", required: false, hint: "Install the Claude Code CLI to let Claude scaffold .webmux.yaml" },
   { tool: "codex", required: false, hint: "Install the Codex CLI to let Codex scaffold .webmux.yaml" },
+  { tool: "codebuddy", required: false, hint: "Install the CodeBuddy Code CLI to let CodeBuddy scaffold .webmux.yaml" },
   { tool: "docker", required: false, hint: "https://docs.docker.com/get-started/get-docker/" },
 ];
 
@@ -51,11 +52,15 @@ function checkDeps(): Dep[] {
 }
 
 function agentLabel(agent: InitAgent): string {
-  return agent === "claude" ? "Claude" : "Codex";
+  if (agent === "claude") return "Claude";
+  if (agent === "codebuddy") return "CodeBuddy";
+  return "Codex";
 }
 
 function defaultTemplateAgent(): InitAgent {
-  return which("codex") && !which("claude") ? "codex" : "claude";
+  if (which("codex") && !which("claude") && !which("codebuddy")) return "codex";
+  if (which("codebuddy") && !which("claude")) return "codebuddy";
+  return "claude";
 }
 
 function createAgentStreamPrinter(label: string): {
@@ -182,16 +187,23 @@ if (existsSync(webmuxYaml)) {
 } else {
   const claudeAvailable = which("claude");
   const codexAvailable = which("codex");
+  const codebuddyAvailable = which("codebuddy");
 
   const choice = await p.select<InitAuthoringChoice>({
     message: "No .webmux.yaml found. How should webmux create it?",
-    initialValue: claudeAvailable ? "claude" : codexAvailable ? "codex" : "manual",
+    initialValue: claudeAvailable ? "claude" : codebuddyAvailable ? "codebuddy" : codexAvailable ? "codex" : "manual",
     options: [
       {
         value: "claude",
         label: "Claude",
         hint: claudeAvailable ? "Claude inspects the repo and adapts the starter .webmux.yaml" : "Claude CLI not found",
         disabled: !claudeAvailable,
+      },
+      {
+        value: "codebuddy",
+        label: "CodeBuddy",
+        hint: codebuddyAvailable ? "CodeBuddy inspects the repo and adapts the starter .webmux.yaml" : "CodeBuddy CLI not found",
+        disabled: !codebuddyAvailable,
       },
       {
         value: "codex",
@@ -212,7 +224,7 @@ if (existsSync(webmuxYaml)) {
     process.exit(1);
   }
 
-  const selectedAgent: InitAgent = choice === "codex" ? "codex" : defaultTemplateAgent();
+  const selectedAgent: InitAgent = choice === "codex" ? "codex" : choice === "codebuddy" ? "codebuddy" : defaultTemplateAgent();
   const context = detectInitProjectContext(gitRoot, selectedAgent);
 
   if (choice === "manual") {

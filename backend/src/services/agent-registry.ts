@@ -66,6 +66,22 @@ const BUILTIN_AGENT_DEFINITIONS: AgentDefinition[] = [
       agent: "codex",
     },
   },
+  {
+    id: "codebuddy",
+    label: "CodeBuddy",
+    kind: "builtin",
+    capabilities: {
+      terminal: true,
+      inAppChat: true,
+      conversationHistory: true,
+      interrupt: true,
+      resume: true,
+    },
+    implementation: {
+      type: "builtin",
+      agent: "codebuddy",
+    },
+  },
 ];
 
 function cloneCapabilities(capabilities: AgentCapabilities): AgentCapabilities {
