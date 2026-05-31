@@ -129,6 +129,7 @@ describe("WorktreeConversationPanel", () => {
     expect(screen.queryByRole("button", { name: "Interrupt" })).not.toBeInTheDocument();
   });
 
+<<<<<<< HEAD
   it("does not duplicate the stale terminal banner inside chat", () => {
     renderPanel({
       worktree: createWorktree({ agentTerminalStale: true }),
@@ -298,6 +299,30 @@ describe("WorktreeConversationPanel", () => {
     });
 
     expect(screen.getByText("Codex is processing")).toBeInTheDocument();
+=======
+  it("allows chat for CodeBuddy worktrees", () => {
+    renderPanel({
+      worktree: createWorktree({
+        agentName: "codebuddy",
+        agentLabel: "CodeBuddy",
+      }),
+    });
+
+    expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+    expect(screen.queryByText("Chat is not available for this worktree yet.")).not.toBeInTheDocument();
+  });
+
+  it("allows chat for Claude-compatible custom worktrees", () => {
+    renderPanel({
+      worktree: createWorktree({
+        agentName: "codebuddy-custom",
+        agentLabel: "CodeBuddy Custom",
+      }),
+    });
+
+    expect(screen.getByRole("button", { name: "Send" })).toBeInTheDocument();
+    expect(screen.queryByText("Chat is not available for this worktree yet.")).not.toBeInTheDocument();
+>>>>>>> 2c750cf (Allow CodeBuddy worktrees in chat panel)
   });
 
   it("shows an approval prompt banner when Claude is waiting for approval", () => {

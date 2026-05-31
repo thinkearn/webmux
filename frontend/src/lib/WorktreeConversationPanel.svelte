@@ -39,8 +39,8 @@
     onSend,
   }: Props = $props();
 
-  const agentLabel = $derived(worktree.agentLabel ?? (worktree.agentName === "claude" ? "Claude" : "Codex"));
-  const supportsAgentChat = $derived(worktree.agentName === "codex" || worktree.agentName === "claude");
+  const agentLabel = $derived(worktree.agentLabel ?? worktree.agentName ?? "Agent");
+  const supportsAgentChat = $derived(worktree.agentName !== null);
   const chatAvailable = $derived(supportsAgentChat && worktree.mux === "✓");
   const showInterrupt = $derived(chatAvailable && (conversation?.running ?? false));
   const showComposerInterrupt = $derived(showInterrupt && !conversationError);
