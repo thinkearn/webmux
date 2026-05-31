@@ -1,7 +1,7 @@
 name: Webmux
 
 workspace:
-  mainBranch: main
+  mainBranch: main-thinkearn
   worktreeRoot: ../workmux-web__worktrees
   defaultAgent: claude
 
