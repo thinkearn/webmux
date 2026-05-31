@@ -9,6 +9,7 @@ backend/dist/
 frontend/dist/
 agents-frontend/dist/
 bin/webmux.js
+bin/webmux-bin
 frontend/.vite/
 agents-frontend/.vite/
 public/
