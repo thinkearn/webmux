@@ -1047,3 +1047,846 @@ export interface ParsedMessage {
   source?: 'tmux' | 'mobile' | 'web';
 }
 ```
+
+## 9. HAPI 项目对比分析
+
+### 9.1 HAPI 显示 Context 信息错误的可能原因
+
+基于对 `tencent-hapi` 项目的代码分析，发现以下问题：
+
+#### 问题 1: 数据源选择逻辑复杂易错
+
+**位置**: `web/src/chat/normalizeAgent.ts:43-55`
+
+```typescript
+const usageSource = isObject(info.last)
+    ? info.last
+    : isObject(info.lastTokenUsage)
+        ? info.lastTokenUsage
+        : isObject(info.last_token_usage)
+            ? info.last_token_usage
+            : isObject(info.total)
+                ? info.total
+                : isObject(info.totalTokenUsage)
+                    ? info.totalTokenUsage
+                    : isObject(info.total_token_usage)
+                        ? info.total_token_usage
+                        : info
+```
+
+**问题**:
+- 优先选择 `last` (当前 turn) 是正确的，但 fallback 链过长
+- 如果 `last` 字段存在但格式不对，会选择错误的数据源
+- `total` 是 session 累计值（可能数百万 tokens），不适合显示当前 context 用量
+
+**我们的改进**:
+- 只从 `stream-json` 的 `result` 事件解析 `usage`
+- 不使用复杂的 fallback 链，解析失败就返回 null
+- 明确区分 `last` (当前 turn) 和 `total` (session 累计)
+
+#### 问题 2: Context Window 可能缺失或错误
+
+**位置**: `web/src/chat/presentation.ts:70`
+
+```typescript
+const contextWindow = asNumber(info?.modelContextWindow ?? info?.model_context_window)
+```
+
+**问题**:
+- 如果 `model_context_window` 字段没有正确传递，context 百分比就无法计算
+- Codex 和 Claude 的 `model_context_window` 字段名可能不一致
+- 没有默认值，导致显示 `Context 50k / undefined`
+
+**我们的改进**:
+- 在 agent 配置中显式定义 `contextWindow` 默认值
+- 支持从 `stream-json` 输出中动态解析 `model_context_window`
+- 提供合理的默认值（Claude: 200k, Codex: 258k）
+
+#### 问题 3: Codex 和 Claude 格式差异处理
+
+**问题**:
+- Codex 使用 `last_token_usage` 和 `model_context_window`
+- Claude 使用 `usage` 和 `modelContextWindow`
+- 代码中试图统一处理两种格式，但容易出错
+
+**我们的改进**:
+- 在 `detectAgentFormat` 中显式检测 agent 类型
+- 为 Claude 和 CodeBuddy 提供独立的 normalization 函数
+- 增加格式检测的单元测试
+
+#### 问题 4: 缓存 Token 计数问题
+
+**位置**: `web/src/chat/normalizeAgent.ts:72`
+
+```typescript
+context_tokens: inputTokens,  // Codex 的 inputTokens 已包含缓存 tokens
+```
+
+**问题**:
+- 注释说为了避免重复计数不使用 `cache_read_input_tokens`
+- 但如果 `inputTokens` 本身就计算有误，context bar 就会错
+- 没有验证 `inputTokens` 是否真的包含了缓存 tokens
+
+**我们的改进**:
+- 明确区分 `input_tokens` 和 `cache_read_input_tokens`
+- 在 UI 中分别显示：Context: 50k (input) + 10k (cached) / 200k
+- 提供 debug 日志帮助诊断计数问题
+
+### 9.2 与 WebMux 方案的对比
+
+| 对比维度 | HAPI | WebMux (我们的方案) |
+|---------|------|---------------------|
+| **数据获取方式** | CLI 端主动推送 `usage-report` 事件 | 从 `stream-json` 输出中解析 `usage` 字段 |
+| **数据源选择** | 复杂 fallback 链 (`last` → `total` → ...) | 只解析 `result.usage`，简单明确 |
+| **Context Window** | 依赖 agent 输出 `model_context_window` | Agent 配置定义默认值 + 动态解析 |
+| **格式处理** | 统一处理 Claude/Codex 格式 | 显式检测格式，分别 normalization |
+| **实时性** | 事件推送，实时性好 | 解析 stdout，实时性也好 |
+| **可靠性** | 依赖 CLI 正确推送 | 直接从 stdout 解析，更可靠 |
+| **通用性** | 只支持 Claude/Codex/Gemini | 支持所有 `--output-format stream-json` 的 agent |
+| **缓存处理** | 可能重复计数 | 明确区分 input 和 cache |
+
+### 9.3 从 HAPI 学到的经验
+
+1. **保持数据源选择简单**: 不要使用复杂的 fallback 链，容易选错
+2. **明确字段名映射**: Claude 使用 camelCase (`modelContextWindow`), Codex 使用 snake_case (`model_context_window`)
+3. **验证 Context Window**: 必须有合理的默认值，否则百分比计算会出错
+4. **分别显示缓存 Tokens**: 不要合并 `input_tokens` 和 `cache_read_input_tokens`
+5. **增加 Debug 日志**: 当 context 显示异常时，帮助诊断问题
+
+## 10. CodeBuddy 格式差异详细分析
+
+### 10.1 JSONL 历史文件格式差异
+
+#### Claude 格式
+
+```jsonl
+{"type":"user","message":{"role":"user","content":"Hello"}}
+{"type":"assistant","message":{"role":"assistant","content":"Hi there!"}}
+{"type":"result","subtype":"success","usage":{"input_tokens":100,"output_tokens":50}}
+```
+
+#### CodeBuddy 格式
+
+```jsonl
+{"type":"message","role":"user","content":[{"type":"input_text","text":"Hello"}]}
+{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Hi there!"}]}
+{"type":"result","subtype":"success","token_usage":{"input_tokens":100,"output_tokens":50}}
+```
+
+#### 关键差异
+
+| 字段 | Claude | CodeBuddy |
+|------|--------|------------|
+| 消息类型 | `type: "user"` / `type: "assistant"` | `type: "message"`, `role: "user"` / `role: "assistant"` |
+| 消息内容 | `message.content: string` | `content: [{type: "input_text", text: "..."}]` |
+| Token 用量 | `usage: {...}` | `token_usage: {...}` |
+
+### 10.2 Stream-JSON 输出格式差异
+
+#### Claude 格式
+
+```json
+{
+  "type": "result",
+  "subtype": "success",
+  "usage": {
+    "input_tokens": 1000,
+    "output_tokens": 500,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 8000
+  }
+}
+```
+
+#### CodeBuddy 格式 (推测，需要实际测试)
+
+```json
+{
+  "type": "result",
+  "subtype": "success",
+  "token_usage": {
+    "input_tokens": 1000,
+    "output_tokens": 500,
+    "cached_input_tokens": 8000
+  }
+}
+```
+
+### 10.3 实现建议
+
+#### 步骤 1: 实际测试 CodeBuddy 输出
+
+```bash
+# 测试 CodeBuddy stream-json 输出
+codebuddy -p --output-format stream-json --max-turns 1 "Hello" | jq .
+```
+
+#### 步骤 2: 更新格式检测逻辑
+
+**文件**: `backend/src/adapters/claude-cli.ts`
+
+```typescript
+function detectAgentFormat(jsonlRecord: Record<string, unknown>): 'claude' | 'codebuddy' | 'unknown' {
+  // 检测 type: "message" (CodeBuddy)
+  if (jsonlRecord.type === 'message' && jsonlRecord.role) {
+    return 'codebuddy';
+  }
+
+  // 检测 type: "user" / "assistant" (Claude)
+  if (jsonlRecord.type === 'user' || jsonlRecord.type === 'assistant') {
+    return 'claude';
+  }
+
+  // 检测 token_usage (CodeBuddy)
+  if (jsonlRecord.token_usage) {
+    return 'codebuddy';
+  }
+
+  // 检测 usage (Claude)
+  if (jsonlRecord.usage) {
+    return 'claude';
+  }
+
+  return 'unknown';
+}
+```
+
+#### 步骤 3: 更新解析逻辑
+
+```typescript
+function parseMessageRecord(record: Record<string, unknown>): NormalizedMessage {
+  const format = detectAgentFormat(record);
+
+  if (format === 'codebuddy') {
+    return parseCodeBuddyMessage(record);
+  }
+
+  return parseClaudeMessage(record);
+}
+
+function parseCodeBuddyMessage(record: Record<string, unknown>): NormalizedMessage {
+  const role = record.role as 'user' | 'assistant';
+  const contentArray = Array.isArray(record.content) ? record.content : [];
+
+  const text = contentArray
+    .filter((item: any) => item.type === 'input_text' || item.type === 'output_text')
+    .map((item: any) => item.text)
+    .join('\n');
+
+  return {
+    role,
+    content: text,
+    timestamp: Date.now(),
+  };
+}
+
+function parseClaudeMessage(record: Record<string, unknown>): NormalizedMessage {
+  const message = isObject(record.message) ? record.message : {};
+  const role = message.role as 'user' | 'assistant';
+  const content = typeof message.content === 'string' ? message.content : '';
+
+  return {
+    role,
+    content,
+    timestamp: Date.now(),
+  };
+}
+```
+
+## 11. 测试策略
+
+### 11.1 单元测试
+
+#### Token Usage 解析测试
+
+**文件**: `backend/src/services/__tests__/claude-stream-service.test.ts`
+
+```typescript
+import { describe, it, expect } from 'vitest';
+import { parseStreamJsonUsage } from '../claude-stream-service';
+
+describe('parseStreamJsonUsage', () => {
+  it('should parse Claude format correctly', () => {
+    const event = {
+      type: 'result',
+      subtype: 'success',
+      usage: {
+        input_tokens: 1000,
+        output_tokens: 500,
+        cache_creation_input_tokens: 0,
+        cache_read_input_tokens: 8000,
+      },
+    };
+
+    const result = parseStreamJsonUsage(event);
+
+    expect(result).toEqual({
+      input_tokens: 1000,
+      output_tokens: 500,
+      cache_creation_input_tokens: 0,
+      cache_read_input_tokens: 8000,
+    });
+  });
+
+  it('should parse CodeBuddy format correctly', () => {
+    const event = {
+      type: 'result',
+      subtype: 'success',
+      token_usage: {
+        input_tokens: 1000,
+        output_tokens: 500,
+        cached_input_tokens: 8000,
+      },
+    };
+
+    const result = parseStreamJsonUsage(event);
+
+    expect(result).toEqual({
+      input_tokens: 1000,
+      output_tokens: 500,
+      cache_creation_input_tokens: undefined,
+      cache_read_input_tokens: 8000,
+    });
+  });
+
+  it('should return null for non-result events', () => {
+    const event = {
+      type: 'content_block_delta',
+      delta: { text: 'Hello' },
+    };
+
+    const result = parseStreamJsonUsage(event);
+
+    expect(result).toBeNull();
+  });
+
+  it('should return null for error results', () => {
+    const event = {
+      type: 'result',
+      subtype: 'error_max_turns',
+      usage: { input_tokens: 100, output_tokens: 50 },
+    };
+
+    const result = parseStreamJsonUsage(event);
+
+    expect(result).toBeNull();
+  });
+});
+```
+
+#### Slash Command 发现测试
+
+**文件**: `backend/src/services/__tests__/slash-command-discovery.test.ts`
+
+```typescript
+import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { discoverSlashCommands } from '../slash-command-discovery';
+
+describe('discoverSlashCommands', () => {
+  it('should discover Claude built-in commands', async () => {
+    const agent = {
+      id: 'claude',
+      type: 'claude-compatible',
+      claude: { command: 'claude' },
+    };
+
+    const commands = await discoverSlashCommands(agent);
+
+    expect(commands).toContainEqual(
+      expect.objectContaining({
+        name: '/help',
+        type: 'builtin',
+      })
+    );
+    expect(commands).toContainEqual(
+      expect.objectContaining({
+        name: '/clear',
+        type: 'builtin',
+      })
+    );
+  });
+
+  it('should discover CodeBuddy skills', async () => {
+    const agent = {
+      id: 'codebuddy',
+      type: 'claude-compatible',
+      claude: { command: 'codebuddy' },
+    };
+
+    const commands = await discoverSlashCommands(agent);
+
+    // Should include skills from .codebuddy/skills/
+    const skillCommands = commands.filter(cmd => cmd.type === 'skill');
+    expect(skillCommands.length).toBeGreaterThan(0);
+  });
+
+  it('should cache results', async () => {
+    const agent = {
+      id: 'claude',
+      type: 'claude-compatible',
+      claude: { command: 'claude' },
+    };
+
+    // First call
+    const commands1 = await discoverSlashCommands(agent);
+
+    // Second call should use cache
+    const commands2 = await discoverSlashCommands(agent);
+
+    expect(commands1).toEqual(commands2);
+  });
+});
+```
+
+### 11.2 集成测试
+
+#### TMUX 同步测试
+
+**文件**: `backend/src/services/__tests__/tmux-sync-service.test.ts`
+
+```typescript
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { tmuxSyncService } from '../tmux-sync-service';
+import { spawn } from 'bun';
+
+describe('TmuxSyncService', () => {
+  let testSessionId: string;
+  let testPaneId: string;
+
+  beforeEach(async () => {
+    // 创建测试 TMUX session
+    await spawn(['tmux', 'new-session', '-d', '-s', 'test-sync']).exited;
+    testSessionId = 'test-sync';
+    testPaneId = 'test-sync:0.0';
+  });
+
+  afterEach(async () => {
+    // 清理测试 TMUX session
+    await spawn(['tmux', 'kill-session', '-t', 'test-sync']).exited;
+  });
+
+  it('should capture TMUX output', async () => {
+    // 在 TMUX 中执行命令
+    await spawn(['tmux', 'send-keys', '-t', testPaneId, 'echo "Hello World"', 'Enter']).exited;
+
+    // 等待捕获
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    const output = await captureTmuxPane(testPaneId);
+    expect(output).toContain('Hello World');
+  });
+
+  it('should broadcast messages to clients', async () => {
+    const mockClient = {
+      readyState: WebSocket.OPEN,
+      send: vi.fn(),
+    };
+
+    tmuxSyncService.registerClient(testSessionId, mockClient as any);
+
+    // 触发输出捕获和广播
+    await tmuxSyncService.startCapture(testSessionId, testPaneId);
+    await new Promise(resolve => setTimeout(resolve, 1000));
+
+    expect(mockClient.send).toHaveBeenCalled();
+  });
+});
+```
+
+### 11.3 E2E 测试
+
+#### 移动端和 TMUX 同步 E2E 测试
+
+**文件**: `e2e/mobile-tmux-sync.test.ts`
+
+```typescript
+import { test, expect } from '@playwright/test';
+
+test('mobile should sync with TMUX', async ({ page, browser }) => {
+  // 启动 TMUX session with agent
+  const tmuxSession = await startTmuxSessionWithAgent();
+
+  // 打开移动端
+  const mobilePage = await browser.newPage({ viewport: { width: 375, height: 667 } });
+  await mobilePage.goto(`http://localhost:5111/worktrees/${tmuxSession.worktreeId}`);
+
+  // 在 TMUX 中发送消息
+  await sendTmuxKeys(tmuxSession.paneId, 'Hello from TMUX\n');
+
+  // 等待移动端同步
+  await mobilePage.waitForSelector('.message-user');
+
+  // 验证移动端显示消息
+  const userMessage = await mobilePage.textContent('.message-user');
+  expect(userMessage).toContain('Hello from TMUX');
+
+  // 在移动端发送回复
+  await mobilePage.fill('.message-input', 'Hello from Mobile');
+  await mobilePage.click('.send-button');
+
+  // 等待 TMUX 同步
+  await new Promise(resolve => setTimeout(resolve, 1000));
+
+  // 验证 TMUX 显示回复
+  const tmuxOutput = await captureTmuxPane(tmuxSession.paneId);
+  expect(tmuxOutput).toContain('Hello from Mobile');
+});
+```
+
+## 12. 性能优化
+
+### 12.1 Token Usage 解析优化
+
+#### 问题: 每次 stdout 都解析
+
+**当前方案**:
+```typescript
+// 每次收到 stdout 数据都解析
+function handleStdout(data: string) {
+  const lines = data.split('\n');
+  for (const line of lines) {
+    const event = JSON.parse(line);  // 解析每一行
+    if (event.type === 'result') {
+      const usage = parseStreamJsonUsage(event);
+      broadcastTokenUsage(usage);
+    }
+  }
+}
+```
+
+**优化方案**: 只解析 `result` 事件
+
+```typescript
+// 缓存解析结果，避免重复解析
+let cachedUsage: TokenUsage | null = null;
+
+function handleStdout(data: string) {
+  const lines = data.split('\n');
+  for (const line of lines) {
+    if (!line.includes('"type":"result"')) continue;  // 快速过滤
+
+    try {
+      const event = JSON.parse(line);
+      if (event.type === 'result' && event.subtype === 'success') {
+        cachedUsage = parseStreamJsonUsage(event);
+        broadcastTokenUsage(cachedUsage);
+      }
+    } catch (e) {
+      // 忽略解析错误
+    }
+  }
+}
+```
+
+### 12.2 Slash Command 缓存优化
+
+#### 问题: 每次打开对话框都重新发现
+
+**优化方案**: 内存缓存 + 版本控制
+
+```typescript
+const slashCommandCache = new Map<string, {
+  commands: SlashCommand[];
+  timestamp: number;
+  version: string;  // agent 配置版本
+}>();
+
+const CACHE_TTL = 5 * 60 * 1000; // 5 minutes
+
+export async function discoverSlashCommands(agent: AgentConfig): Promise<SlashCommand[]> {
+  const cacheKey = `${agent.id}`;
+  const cached = slashCommandCache.get(cacheKey);
+
+  // 检查缓存是否有效
+  if (cached &&
+      (Date.now() - cached.timestamp) < CACHE_TTL &&
+      cached.version === agent.version) {
+    return cached.commands;
+  }
+
+  // 重新发现
+  const commands = await discoverFromCli(agent);
+
+  slashCommandCache.set(cacheKey, {
+    commands,
+    timestamp: Date.now(),
+    version: agent.version || 'default',
+  });
+
+  return commands;
+}
+```
+
+### 12.3 TMUX 捕获优化
+
+#### 问题: 每 500ms 捕获一次，浪费资源
+
+**优化方案 1**: 增量捕获
+
+```typescript
+let lastCaptureLineCount = 0;
+
+async function captureTmuxIncremental(paneId: string): Promise<string> {
+  // 只捕获新增的行
+  const capture = await Bun.spawn([
+    'tmux', 'capture-pane',
+    '-t', paneId,
+    '-p',
+    '-J',
+    '-S', `-${lastCaptureLineCount + 100}`,  // 只捕获新增的 100 行
+  ]).exited;
+
+  const output = await new Response(capture).text();
+  const lines = output.split('\n');
+  lastCaptureLineCount = lines.length;
+
+  return output;
+}
+```
+
+**优化方案 2**: 使用 TMUX hook 触发捕获
+
+```bash
+# 在 TMUX 中注册 hook
+tmux set-hook -t session pane-output 'run-shell "curl -X POST http://localhost:5111/api/internal/tmux-output -d pane_id=%p"'
+```
+
+## 13. 安全考虑
+
+### 13.1 WebSocket 认证
+
+**问题**: 未认证的 WebSocket 连接可以接收敏感信息
+
+**解决方案**:
+
+```typescript
+// backend/src/server.ts
+
+app.get('/api/tmux-sync/:worktreeId', (c) => {
+  const token = c.req.query('token');
+  const userId = await validateToken(token);
+
+  if (!userId) {
+    return c.text('Unauthorized', 401);
+  }
+
+  // 检查用户是否有权限访问该 worktree
+  const worktree = await getWorktree(c.req.param('worktreeId'));
+  if (worktree.ownerId !== userId) {
+    return c.text('Forbidden', 403);
+  }
+
+  // 升级为 WebSocket
+  const { socket, response } = Bun.upgradeWebSocket(c.req.raw, {
+    protocol: 'tmux-sync',
+  });
+
+  // 注册客户端
+  tmuxSyncService.registerClient(worktreeId, socket, userId);
+
+  return response;
+});
+```
+
+### 13.2 输入验证
+
+**问题**: 用户可以发送恶意消息到 TMUX
+
+**解决方案**:
+
+```typescript
+// backend/src/server.ts
+
+async function sendToTmux(worktreeId: string, content: string): Promise<void> {
+  // 验证输入
+  if (!content || typeof content !== 'string') {
+    throw new Error('Invalid message content');
+  }
+
+  // 防止命令注入
+  const sanitized = content
+    .replace(/;/g, '')  // 移除分号
+    .replace(/&&/g, '') // 移除 &&
+    .replace(/\|\|/g, '') // 移除 ||
+    .trim();
+
+  if (sanitized.length === 0) {
+    throw new Error('Empty message after sanitization');
+  }
+
+  // 发送消息
+  await Bun.spawn([
+    'tmux', 'send-keys',
+    '-t', worktree.tmuxPaneId,
+    sanitized,
+    'Enter',
+  ]).exited;
+}
+```
+
+## 14. 部署和配置
+
+### 14.1 环境变量
+
+```bash
+# backend/.env
+
+# WebSocket 配置
+WEBSOCKET_HEARTBEAT_INTERVAL=30000  # 心跳间隔 (ms)
+WEBSOCKET_MAX_PAYLOAD=1048576       # 最大消息大小 (1MB)
+
+# TMUX 同步配置
+TMUX_CAPTURE_INTERVAL=500           # 捕获间隔 (ms)
+TMUX_CAPTURE_MAX_LINES=100         # 最大捕获行数
+
+# Slash Command 发现配置
+SLASH_COMMAND_CACHE_TTL=300000      # 缓存有效期 (5 minutes)
+SLASH_COMMAND_DISCOVERY_TIMEOUT=10000  # 发现超时 (10 seconds)
+
+# Token Usage 配置
+TOKEN_USAGE_DEFAULT_CONTEXT_WINDOW=200000  # 默认 context window
+TOKEN_USAGE_ENABLE_BROADCAST=true          # 是否广播 token usage
+```
+
+### 14.2 Agent 配置示例
+
+```json
+{
+  "agents": [
+    {
+      "id": "claude",
+      "type": "builtin",
+      "cliStyle": "claude",
+      "claude": {
+        "command": "claude",
+        "historyRoot": "~/.claude/projects",
+        "settingsDir": ".claude",
+        "contextWindow": 200000
+      }
+    },
+    {
+      "id": "codebuddy",
+      "type": "builtin",
+      "cliStyle": "claude",
+      "claude": {
+        "command": "codebuddy",
+        "historyRoot": "~/.codebuddy/projects",
+        "settingsDir": ".codebuddy",
+        "contextWindow": 200000
+      }
+    },
+    {
+      "id": "my-custom-agent",
+      "type": "custom",
+      "label": "My Custom Agent",
+      "cliStyle": "claude",
+      "claude": {
+        "command": "/path/to/my-agent",
+        "historyRoot": "~/.my-agent/projects",
+        "settingsDir": ".my-agent",
+        "contextWindow": 100000
+      }
+    }
+  ]
+}
+```
+
+## 15. 故障排查
+
+### 15.1 Token Usage 显示不正确
+
+**症状**: Context 用量显示 0 或 undefined
+
+**排查步骤**:
+
+1. 检查 agent 是否支持 `--output-format stream-json`
+   ```bash
+   claude -p --output-format stream-json --max-turns 1 "Hello"
+   ```
+
+2. 检查 `result` 事件是否包含 `usage` 字段
+   ```typescript
+   // 增加 debug 日志
+   function handleStreamJsonMessage(event: any) {
+     console.log('Received event:', event.type, event.subtype);
+     if (event.type === 'result') {
+       console.log('Usage:', event.usage || event.token_usage);
+     }
+   }
+   ```
+
+3. 检查 `model_context_window` 是否正确设置
+   ```typescript
+   console.log('Agent config:', agentConfig);
+   console.log('Context window:', agentConfig.contextWindow);
+   ```
+
+### 15.2 Slash Command 发现失败
+
+**症状**: 输入 `/` 后没有显示命令列表
+
+**排查步骤**:
+
+1. 检查 agent 是否支持 `--verbose` 和 `--output-format stream-json`
+   ```bash
+   claude -p --verbose --output-format stream-json --max-turns 1 "/" | grep slash_commands
+   ```
+
+2. 检查 `system init` 事件是否包含 `slash_commands`
+   ```typescript
+   // 增加 debug 日志
+   if (event.type === 'system' && event.subtype === 'init') {
+     console.log('Slash commands:', event.slash_commands);
+   }
+   ```
+
+3. 检查缓存是否过期
+   ```typescript
+   console.log('Cache:', slashCommandCache.get(agentId));
+   ```
+
+### 15.3 TMUX 同步延迟高
+
+**症状**: 移动端显示消息延迟 > 1s
+
+**排查步骤**:
+
+1. 检查捕获间隔
+   ```typescript
+   console.log('Capture interval:', TMUX_CAPTURE_INTERVAL);
+   ```
+
+2. 检查 TMUX hook 是否生效
+   ```bash
+   tmux show-hooks -t session
+   ```
+
+3. 使用增量捕获优化
+   ```typescript
+   // 改用 hook-based 方案
+   await registerTmuxHook(paneId, 'pane-output', handlePaneOutput);
+   ```
+
+## 16. 未来改进方向
+
+### 16.1 支持更多 Agent 类型
+
+- OpenCode
+- Aider
+- Continue
+
+### 16.2 支持更多同步方式
+
+- 使用 File System Events (inotify) 监控历史文件变化
+- 使用 Shared Memory 在进程间共享消息
+
+### 16.3 支持更多平台
+
+- Windows (ConEmu, Windows Terminal)
+- macOS (iTerm2, Terminal.app)
+
+### 16.4 AI 辅助优化
+
+- 使用 AI 自动检测 agent 输出格式
+- 使用 AI 自动生成格式 normalization 代码
+
