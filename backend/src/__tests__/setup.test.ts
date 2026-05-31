@@ -327,6 +327,15 @@ describe("loadConfig", () => {
         "    label: Gemini CLI",
         "    startCommand: gemini --project . --prompt \"${PROMPT}\"",
         "    resumeCommand: gemini resume --last",
+        "  codebuddy-cli:",
+        "    label: CodeBuddy CLI",
+        "    startCommand: codebuddy --print \"${PROMPT}\"",
+        "    resumeCommand: codebuddy --continue",
+        "    cliStyle: claude",
+        "    claude:",
+        "      command: codebuddy",
+        "      historyRoot: ~/.codebuddy/projects",
+        "      settingsDir: .codebuddy",
         "",
       ].join("\n"),
     );
@@ -338,6 +347,17 @@ describe("loadConfig", () => {
         label: "Gemini CLI",
         startCommand: 'gemini --project . --prompt "${PROMPT}"',
         resumeCommand: "gemini resume --last",
+      },
+      "codebuddy-cli": {
+        label: "CodeBuddy CLI",
+        startCommand: 'codebuddy --print "${PROMPT}"',
+        resumeCommand: "codebuddy --continue",
+        cliStyle: "claude",
+        claude: {
+          command: "codebuddy",
+          historyRoot: "~/.codebuddy/projects",
+          settingsDir: ".codebuddy",
+        },
       },
     });
   });
@@ -351,6 +371,12 @@ describe("loadConfig", () => {
       label: "Gemini CLI",
       startCommand: 'gemini --project . --prompt "${PROMPT}"',
       resumeCommand: "gemini resume --last",
+      cliStyle: "claude",
+      claude: {
+        command: "codebuddy",
+        historyRoot: "~/.codebuddy/projects",
+        settingsDir: ".codebuddy",
+      },
     });
 
     let config = loadConfig(dir);
@@ -359,6 +385,12 @@ describe("loadConfig", () => {
         label: "Gemini CLI",
         startCommand: 'gemini --project . --prompt "${PROMPT}"',
         resumeCommand: "gemini resume --last",
+        cliStyle: "claude",
+        claude: {
+          command: "codebuddy",
+          historyRoot: "~/.codebuddy/projects",
+          settingsDir: ".codebuddy",
+        },
       },
     });
 

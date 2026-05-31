@@ -557,6 +557,7 @@ async function ensureGeneratedAgentSettingsIgnored(gitDir: string): Promise<void
 export async function ensureAgentRuntimeArtifacts(input: {
   gitDir: string;
   worktreePath: string;
+  settingsDirs?: string[];
 }): Promise<AgentRuntimeArtifacts> {
   const storagePaths = getWorktreeStoragePaths(input.gitDir);
   const artifacts: AgentRuntimeArtifacts = {
@@ -566,9 +567,17 @@ export async function ensureAgentRuntimeArtifacts(input: {
     codexHooksPath: join(input.worktreePath, ".codex", "hooks.json"),
   };
 
+  const extraSettingsPaths = Array.from(new Set(input.settingsDirs ?? []))
+    .filter((settingsDir) => settingsDir.length > 0 && !settingsDir.startsWith("/") && !settingsDir.includes(".."))
+    .map((settingsDir) => join(input.worktreePath, settingsDir, "settings.local.json"))
+    .filter((settingsPath) => settingsPath !== artifacts.claudeSettingsPath && settingsPath !== artifacts.codebuddySettingsPath);
+
   await mkdir(dirname(artifacts.claudeSettingsPath), { recursive: true });
   await mkdir(dirname(artifacts.codebuddySettingsPath), { recursive: true });
   await mkdir(dirname(artifacts.codexHooksPath), { recursive: true });
+  for (const settingsPath of extraSettingsPaths) {
+    await mkdir(dirname(settingsPath), { recursive: true });
+  }
 
   await Bun.write(artifacts.agentCtlPath, buildAgentCtlScript());
   await chmod(artifacts.agentCtlPath, 0o755);
@@ -580,6 +589,9 @@ export async function ensureAgentRuntimeArtifacts(input: {
   }
   await mergeClaudeSettings(artifacts.claudeSettingsPath, hooks);
   await mergeClaudeSettings(artifacts.codebuddySettingsPath, hooks);
+  for (const settingsPath of extraSettingsPaths) {
+    await mergeClaudeSettings(settingsPath, hooks);
+  }
   await ensureGeneratedAgentSettingsIgnored(input.gitDir);
   await mergeCodexHooksFile(artifacts.codexHooksPath, buildCodexHookSettings(artifacts).hooks, artifacts.agentCtlPath);
 

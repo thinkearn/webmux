@@ -85,6 +85,24 @@ describe("ensureAgentRuntimeArtifacts", () => {
     expect(excludeText).toContain(".codebuddy/settings.local.json");
   });
 
+  it("writes hook settings into custom Claude-compatible settings directories", async () => {
+    const gitDir = await mkdtemp(join(tmpdir(), "webmux-agent-runtime-gitdir-"));
+    const worktreePath = await mkdtemp(join(tmpdir(), "webmux-agent-runtime-worktree-"));
+    tempDirs.push(gitDir, worktreePath);
+
+    await ensureWorktreeStorageDirs(gitDir);
+    await ensureAgentRuntimeArtifacts({
+      gitDir,
+      worktreePath,
+      settingsDirs: [".custom-codebuddy"],
+    });
+
+    const settings = await Bun.file(join(worktreePath, ".custom-codebuddy", "settings.local.json")).json() as {
+      hooks?: { Notification?: Array<{ hooks?: Array<{ command?: string }> }> };
+    };
+    expect(settings.hooks?.Notification?.[0]?.hooks?.[0]?.command).toContain("claude-approval-requested");
+  });
+
   it("preserves non-webmux Codex hooks when refreshing generated hooks", async () => {
     const gitDir = await mkdtemp(join(tmpdir(), "webmux-agent-runtime-gitdir-"));
     const worktreePath = await mkdtemp(join(tmpdir(), "webmux-agent-runtime-worktree-"));

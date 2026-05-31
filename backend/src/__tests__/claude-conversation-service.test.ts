@@ -18,13 +18,13 @@ class FakeClaudeCliGateway implements Pick<ClaudeCliGateway, "listSessions" | "r
   readonly sessions = new Map<string, ClaudeCliSession>();
   listedSessions: ClaudeCliSessionSummary[] = [];
 
-  async listSessions(cwd: string): Promise<ClaudeCliSessionSummary[]> {
-    this.calls.push(`listSessions:${cwd}`);
+  async listSessions(cwd: string, options?: { historyRoot?: string }): Promise<ClaudeCliSessionSummary[]> {
+    this.calls.push(`listSessions:${cwd}:${options?.historyRoot ?? "default"}`);
     return this.listedSessions.map((session) => ({ ...session }));
   }
 
-  async readSession(sessionId: string, cwd: string): Promise<ClaudeCliSession | null> {
-    this.calls.push(`readSession:${sessionId}:${cwd}`);
+  async readSession(sessionId: string, cwd: string, options?: { historyRoot?: string }): Promise<ClaudeCliSession | null> {
+    this.calls.push(`readSession:${sessionId}:${cwd}:${options?.historyRoot ?? "default"}`);
     return structuredClone(this.sessions.get(sessionId) ?? null);
   }
 }
@@ -149,6 +149,53 @@ describe("ClaudeConversationService", () => {
       cwd: worktree.path,
       lastSeenAt: "2026-04-14T12:00:00.000Z",
     });
+  });
+
+  it("reads Claude-compatible custom agent history from configured roots", async () => {
+    const metaStore = new Map<string, WorktreeMeta>();
+    const worktree = makeWorktree();
+    worktree.agentName = "codebuddy-cli";
+    worktree.agentLabel = "CodeBuddy CLI";
+    const gitDir = `${worktree.path}/.git`;
+    metaStore.set(gitDir, { ...makeMeta(), agent: "codebuddy-cli" });
+
+    const session = makeSession({
+      sessionId: "codebuddy-session",
+      cwd: worktree.path,
+      messages: [{
+        id: "assistant-1",
+        turnId: "turn-1",
+        role: "assistant",
+        text: "Ready from CodeBuddy history.",
+        createdAt: "2026-04-14T10:02:00.000Z",
+      }],
+    });
+    const claude = new FakeClaudeCliGateway();
+    claude.listedSessions = [{
+      sessionId: session.sessionId,
+      cwd: worktree.path,
+      path: session.path,
+      lastSeenAt: "2026-04-14T10:05:00.000Z",
+    }];
+    claude.sessions.set(session.sessionId, structuredClone(session));
+
+    const service = new ClaudeConversationService({
+      claude,
+      git: new FakeGitGateway(),
+      readMeta: async (path) => structuredClone(metaStore.get(path) ?? null),
+      writeMeta: async (path, meta) => {
+        metaStore.set(path, structuredClone(meta));
+      },
+    });
+
+    const result = await service.attachWorktreeConversation(worktree, { historyRoot: "~/.codebuddy/projects" });
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.data.conversation.conversationId).toBe("codebuddy-session");
+    expect(result.data.conversation.messages[0]?.text).toBe("Ready from CodeBuddy history.");
+    expect(claude.calls).toContain(`listSessions:${worktree.path}:~/.codebuddy/projects`);
+    expect(claude.calls).toContain(`readSession:codebuddy-session:${worktree.path}:~/.codebuddy/projects`);
   });
 
   it("includes an active approval prompt in the conversation response", async () => {

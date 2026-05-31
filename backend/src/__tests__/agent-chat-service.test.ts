@@ -64,6 +64,43 @@ describe("resolveAgentChatSupport", () => {
     });
   });
 
+  it("maps Claude-compatible custom agents to the Claude dashboard chat provider", () => {
+    const agent = getAgentDefinition({
+      ...TEST_CONFIG,
+      agents: {
+        "codebuddy-cli": {
+          label: "CodeBuddy CLI",
+          startCommand: 'codebuddy --print "${PROMPT}"',
+          resumeCommand: "codebuddy --continue",
+          cliStyle: "claude",
+          claude: {
+            command: "codebuddy",
+            historyRoot: "~/.codebuddy/projects",
+            settingsDir: ".codebuddy",
+          },
+        },
+      },
+    }, "codebuddy-cli");
+
+    expect(resolveAgentChatSupport({
+      agentId: "codebuddy-cli",
+      agentLabel: "CodeBuddy CLI",
+      agent,
+      action: "chat",
+    })).toEqual({
+      ok: true,
+      data: {
+        provider: "claude",
+        submitDelayMs: 0,
+        claude: {
+          command: "codebuddy",
+          historyRoot: "~/.codebuddy/projects",
+          settingsDir: ".codebuddy",
+        },
+      },
+    });
+  });
+
   it("rejects terminal-only custom agents", () => {
     expect(resolveAgentChatSupport({
       agentId: "gemini",

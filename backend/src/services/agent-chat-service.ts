@@ -1,8 +1,11 @@
+import { CUSTOM_AGENT_DEFAULTS } from "@webmux/api-contract";
+import type { CustomAgentClaudeConfig } from "../domain/config";
 import type { AgentDefinition } from "./agent-registry";
 
 export interface AgentChatSupport {
   provider: "claude" | "codex";
   submitDelayMs: number;
+  claude?: CustomAgentClaudeConfig;
 }
 
 const CODEX_SUBMIT_DELAY_MS = 200;
@@ -62,6 +65,17 @@ export function resolveAgentChatSupport(input: {
       data: {
         provider: input.agent.implementation.agent,
         submitDelayMs: resolveAgentTerminalSubmitDelayMs(input),
+      },
+    };
+  }
+
+  if (input.agent.kind === "custom" && input.agent.implementation.config.cliStyle === "claude") {
+    return {
+      ok: true,
+      data: {
+        provider: "claude",
+        submitDelayMs: 0,
+        claude: input.agent.implementation.config.claude ?? { ...CUSTOM_AGENT_DEFAULTS.claude },
       },
     };
   }

@@ -122,20 +122,21 @@ function cloneDefinition(definition: AgentDefinition): AgentDefinition {
 }
 
 function buildCustomAgentDefinition(id: AgentId, config: CustomAgentConfig): CustomAgentDefinition {
+  const claudeCompatible = config.cliStyle === "claude";
   return {
     id,
     label: config.label,
     kind: "custom",
     capabilities: {
       terminal: true,
-      inAppChat: false,
-      conversationHistory: false,
-      interrupt: false,
+      inAppChat: claudeCompatible,
+      conversationHistory: claudeCompatible,
+      interrupt: claudeCompatible,
       resume: config.resumeCommand !== undefined,
     },
     implementation: {
       type: "custom",
-      config: { ...config },
+      config: { ...config, ...(config.claude ? { claude: { ...config.claude } } : {}) },
     },
   };
 }
@@ -181,5 +182,7 @@ export function listAgentDetails(config: Pick<ProjectConfig, "agents">): AgentDe
     capabilities: cloneCapabilities(agent.capabilities),
     startCommand: agent.kind === "custom" ? agent.implementation.config.startCommand : null,
     resumeCommand: agent.kind === "custom" ? agent.implementation.config.resumeCommand ?? null : null,
+    ...(agent.kind === "custom" ? { cliStyle: agent.implementation.config.cliStyle ?? "terminal" } : {}),
+    ...(agent.kind === "custom" && agent.implementation.config.claude ? { claude: { ...agent.implementation.config.claude } } : {}),
   }));
 }

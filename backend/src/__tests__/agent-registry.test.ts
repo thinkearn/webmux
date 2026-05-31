@@ -100,6 +100,32 @@ describe("agent-registry", () => {
     ]);
   });
 
+  it("exposes Claude-compatible custom agents as dashboard-chat capable", () => {
+    const definitions = listAgentDefinitions({
+      agents: {
+        "codebuddy-cli": {
+          label: "CodeBuddy CLI",
+          startCommand: 'codebuddy --print "${PROMPT}"',
+          resumeCommand: "codebuddy --continue",
+          cliStyle: "claude",
+          claude: {
+            command: "codebuddy",
+            historyRoot: "~/.codebuddy/projects",
+            settingsDir: ".codebuddy",
+          },
+        },
+      },
+    });
+
+    expect(definitions.find((agent) => agent.id === "codebuddy-cli")?.capabilities).toEqual({
+      terminal: true,
+      inAppChat: true,
+      conversationHistory: true,
+      interrupt: true,
+      resume: true,
+    });
+  });
+
   it("ignores custom agents that collide with built-in ids", () => {
     const definitions = listAgentDefinitions({
       ...TEST_CONFIG,
@@ -184,6 +210,7 @@ describe("agent-registry", () => {
         },
         startCommand: 'gemini --prompt "${PROMPT}"',
         resumeCommand: "gemini resume --last",
+        cliStyle: "terminal",
       },
     ]);
   });

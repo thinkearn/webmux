@@ -23,18 +23,19 @@ const originalDialogClose = HTMLDialogElement.prototype.close;
 
 function createAgentDetails(overrides: Partial<AgentDetails> = {}): AgentDetails {
   return {
-    id: "gemini",
-    label: "Gemini CLI",
-    kind: "custom",
-    capabilities: {
-      terminal: true,
-      inAppChat: false,
-      conversationHistory: false,
-      interrupt: false,
-      resume: true,
-    },
-    startCommand: 'gemini --prompt "${PROMPT}"',
-    resumeCommand: 'gemini resume --branch "${BRANCH}"',
+      id: "gemini",
+      label: "Gemini CLI",
+      kind: "custom",
+      capabilities: {
+        terminal: true,
+        inAppChat: false,
+        conversationHistory: false,
+        interrupt: false,
+        resume: true,
+      },
+      startCommand: 'gemini --prompt "${PROMPT}"',
+      resumeCommand: 'gemini resume --branch "${BRANCH}"',
+      cliStyle: "terminal",
     ...overrides,
   };
 }
@@ -198,12 +199,27 @@ describe("SettingsDialog agent management", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Add agent" }));
     await fireEvent.input(screen.getByLabelText("Agent name"), { target: { value: "Gemini CLI" } });
     await fireEvent.input(screen.getByLabelText("Start command"), { target: { value: 'gemini --prompt "${PROMPT}"' } });
+    expect(screen.getByLabelText("CLI style")).toHaveValue("terminal");
+    await fireEvent.change(screen.getByLabelText("CLI style"), { target: { value: "claude", selectedIndex: 1 } });
+    await waitFor(() => {
+      expect(screen.getByLabelText("Claude-compatible command")).toHaveValue("claude");
+    });
+    expect(screen.queryByLabelText("Start command")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Resume command (optional)")).not.toBeInTheDocument();
+    await fireEvent.input(screen.getByLabelText("Claude-compatible command"), { target: { value: "codebuddy" } });
+    await fireEvent.input(screen.getByLabelText("Conversation history root"), { target: { value: "~/.codebuddy/projects" } });
+    await fireEvent.input(screen.getByLabelText("Settings directory"), { target: { value: ".codebuddy" } });
     await fireEvent.click(screen.getByRole("button", { name: "Test" }));
 
     await waitFor(() => {
       expect(validateAgent).toHaveBeenCalledWith({
         label: "Gemini CLI",
-        startCommand: 'gemini --prompt "${PROMPT}"',
+        cliStyle: "claude",
+        claude: {
+          command: "codebuddy",
+          historyRoot: "~/.codebuddy/projects",
+          settingsDir: ".codebuddy",
+        },
       });
     });
     expect(await screen.findByText("Configuration looks good.")).toBeInTheDocument();
@@ -213,7 +229,12 @@ describe("SettingsDialog agent management", () => {
     await waitFor(() => {
       expect(createAgent).toHaveBeenCalledWith({
         label: "Gemini CLI",
-        startCommand: 'gemini --prompt "${PROMPT}"',
+        cliStyle: "claude",
+        claude: {
+          command: "codebuddy",
+          historyRoot: "~/.codebuddy/projects",
+          settingsDir: ".codebuddy",
+        },
       });
     });
     await waitFor(() => {

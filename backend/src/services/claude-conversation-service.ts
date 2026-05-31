@@ -2,6 +2,7 @@ import { readWorktreeMeta, writeWorktreeMeta } from "../adapters/fs";
 import type {
   ClaudeCliConversationMessage,
   ClaudeCliGateway,
+  type ClaudeCliOptions,
   ClaudeCliSession,
 } from "../adapters/claude-cli";
 import type {
@@ -32,10 +33,6 @@ export interface ClaudeConversationServiceDependencies {
 interface ResolvedClaudeConversation {
   conversationMeta: ClaudeWorktreeConversationMeta | null;
   session: ClaudeCliSession | null;
-}
-
-function isClaudeWorktree(worktree: WorktreeSnapshot): boolean {
-  return worktree.agentName === "claude";
 }
 
 function isClaudeConversationMeta(meta: WorktreeConversationMeta | null | undefined): meta is ClaudeWorktreeConversationMeta {
@@ -110,30 +107,29 @@ export class ClaudeConversationService {
 
   async attachWorktreeConversation(
     worktree: WorktreeSnapshot,
+    options: ClaudeCliOptions = {},
   ): Promise<WorktreeConversationResult<AgentsUiWorktreeConversationResponse>> {
-    return await this.withResolvedConversation(worktree, async (resolved) =>
+    return await this.withResolvedConversation(worktree, options, async (resolved) =>
       ok(toWorktreeConversationResponse(worktree, resolved.conversationMeta, resolved.session))
     );
   }
 
   async readWorktreeConversation(
     worktree: WorktreeSnapshot,
+    options: ClaudeCliOptions = {},
   ): Promise<WorktreeConversationResult<AgentsUiWorktreeConversationResponse>> {
-    return await this.withResolvedConversation(worktree, async (resolved) =>
+    return await this.withResolvedConversation(worktree, options, async (resolved) =>
       ok(toWorktreeConversationResponse(worktree, resolved.conversationMeta, resolved.session))
     );
   }
 
   private async withResolvedConversation<T>(
     worktree: WorktreeSnapshot,
+    options: ClaudeCliOptions,
     fn: (resolved: ResolvedClaudeConversation) => Promise<WorktreeConversationResult<T>>,
   ): Promise<WorktreeConversationResult<T>> {
-    if (!isClaudeWorktree(worktree)) {
-      return err(409, "Worktree chat is only available for Claude worktrees");
-    }
-
     try {
-      const resolved = await this.resolveConversation(worktree);
+      const resolved = await this.resolveConversation(worktree, options);
       if (!resolved.ok) return resolved;
       return await fn(resolved.data);
     } catch (error) {
@@ -144,6 +140,7 @@ export class ClaudeConversationService {
 
   private async resolveConversation(
     worktree: WorktreeSnapshot,
+    options: ClaudeCliOptions,
   ): Promise<WorktreeConversationResult<ResolvedClaudeConversation>> {
     const gitDir = this.deps.git.resolveWorktreeGitDir(worktree.path);
     const meta = await this.readMeta(gitDir);
@@ -151,7 +148,7 @@ export class ClaudeConversationService {
       return err(409, "Worktree metadata is missing");
     }
 
-    const session = await this.resolveSession(meta, worktree.path);
+    const session = await this.resolveSession(meta, worktree.path, options);
     const conversationMeta = session
       ? await this.persistConversationMeta(gitDir, meta, worktree.path, session.sessionId)
       : null;
@@ -162,7 +159,7 @@ export class ClaudeConversationService {
     });
   }
 
-  private async resolveSession(meta: WorktreeMeta, cwd: string): Promise<ClaudeCliSession | null> {
+  private async resolveSession(meta: WorktreeMeta, cwd: string, options: ClaudeCliOptions): Promise<ClaudeCliSession | null> {
     const savedSessionId = isClaudeConversationMeta(meta.conversation)
       ? meta.conversation.sessionId
       : null;
@@ -171,21 +168,21 @@ export class ClaudeConversationService {
     // (~/.claude/projects/<encoded-cwd>/) is keyed by cwd and persists across
     // worktree removal/recreation, so a stale saved sessionId can otherwise
     // pin us to an old run's JSONL forever.
-    const discovered = (await this.deps.claude.listSessions(cwd))[0] ?? null;
+    const discovered = (await this.deps.claude.listSessions(cwd, options))[0] ?? null;
 
     if (discovered && discovered.sessionId !== savedSessionId) {
-      const session = await this.deps.claude.readSession(discovered.sessionId, cwd);
+      const session = await this.deps.claude.readSession(discovered.sessionId, cwd, options);
       if (session) return session;
     }
 
     if (savedSessionId) {
-      const savedSession = await this.deps.claude.readSession(savedSessionId, cwd);
+      const savedSession = await this.deps.claude.readSession(savedSessionId, cwd, options);
       if (savedSession) return savedSession;
       log.warn(`[agents] saved Claude session missing, rediscovering cwd=${cwd} sessionId=${savedSessionId}`);
     }
 
     if (!discovered) return null;
-    return await this.deps.claude.readSession(discovered.sessionId, cwd);
+    return await this.deps.claude.readSession(discovered.sessionId, cwd, options);
   }
 
   private async persistConversationMeta(

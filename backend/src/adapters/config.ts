@@ -1,6 +1,7 @@
 import { readFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { parse as parseYaml, stringify as stringifyYaml } from "yaml";
+import { CUSTOM_AGENT_DEFAULTS } from "@webmux/api-contract";
 import { log } from "../lib/log";
 import type {
   AgentId,
@@ -212,7 +213,10 @@ function parseProfiles(raw: unknown, includeDefaultProfile: boolean): Record<str
 }
 
 function cloneAgentConfig(agent: CustomAgentConfig): CustomAgentConfig {
-  return { ...agent };
+  return {
+    ...agent,
+    ...(agent.claude ? { claude: { ...agent.claude } } : {}),
+  };
 }
 
 function cloneAgents(agents: Record<AgentId, CustomAgentConfig>): Record<AgentId, CustomAgentConfig> {
@@ -224,13 +228,31 @@ function cloneAgents(agents: Record<AgentId, CustomAgentConfig>): Record<AgentId
 function parseCustomAgent(raw: unknown): CustomAgentConfig | null {
   if (!isRecord(raw)) return null;
   if (typeof raw.label !== "string" || !raw.label.trim()) return null;
-  if (typeof raw.startCommand !== "string" || !raw.startCommand.trim()) return null;
+  const cliStyle = raw.cliStyle === "claude" ? "claude" : "terminal";
+  if (cliStyle !== "claude" && (typeof raw.startCommand !== "string" || !raw.startCommand.trim())) return null;
+  const claude = isRecord(raw.claude) ? raw.claude : {};
 
   return {
     label: raw.label.trim(),
-    startCommand: raw.startCommand.trim(),
+    startCommand: typeof raw.startCommand === "string" ? raw.startCommand.trim() : "",
     ...(typeof raw.resumeCommand === "string" && raw.resumeCommand.trim()
       ? { resumeCommand: raw.resumeCommand.trim() }
+      : {}),
+    ...(cliStyle === "claude"
+      ? {
+          cliStyle,
+          claude: {
+            command: typeof claude.command === "string" && claude.command.trim()
+              ? claude.command.trim()
+              : CUSTOM_AGENT_DEFAULTS.claude.command,
+            historyRoot: typeof claude.historyRoot === "string" && claude.historyRoot.trim()
+              ? claude.historyRoot.trim()
+              : CUSTOM_AGENT_DEFAULTS.claude.historyRoot,
+            settingsDir: typeof claude.settingsDir === "string" && claude.settingsDir.trim()
+              ? claude.settingsDir.trim()
+              : CUSTOM_AGENT_DEFAULTS.claude.settingsDir,
+          },
+        }
       : {}),
   };
 }
@@ -651,6 +673,8 @@ export async function persistLocalCustomAgent(
     label: agent.label,
     startCommand: agent.startCommand,
     ...(agent.resumeCommand ? { resumeCommand: agent.resumeCommand } : {}),
+    ...(agent.cliStyle === "claude" ? { cliStyle: agent.cliStyle } : {}),
+    ...(agent.cliStyle === "claude" && agent.claude ? { claude: { ...agent.claude } } : {}),
   } satisfies Record<string, unknown>;
   existing.agents = agents;
 

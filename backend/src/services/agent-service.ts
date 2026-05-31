@@ -104,9 +104,19 @@ function buildCustomAgentInvocation(input: {
   profileName: string;
   launchMode?: AgentLaunchMode;
 }): string {
-  const template = input.launchMode === "resume" && input.agent.implementation.config.resumeCommand
-    ? input.agent.implementation.config.resumeCommand
-    : input.agent.implementation.config.startCommand;
+  const config = input.agent.implementation.config;
+  if (config.cliStyle === "claude" && config.claude) {
+    return buildBuiltInAgentInvocation({
+      agent: "claude",
+      systemPrompt: input.systemPrompt,
+      prompt: input.prompt,
+      launchMode: input.launchMode,
+    }).replace(/^claude/, config.claude.command);
+  }
+
+  const template = input.launchMode === "resume" && config.resumeCommand
+    ? config.resumeCommand
+    : config.startCommand;
   const exports = buildCustomAgentExports(input);
   const renderedCommand = renderCustomCommandTemplate(template);
   return `${exports}; ${renderedCommand}`;

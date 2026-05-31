@@ -8,7 +8,7 @@
   import ConfirmDialog from "./ConfirmDialog.svelte";
   import AgentEditorDialog from "./AgentEditorDialog.svelte";
   import { api, createAgent, deleteAgent, fetchAgents, updateAgent, validateAgent } from "./api";
-  import type { AgentDetails, AgentSummary, UpsertCustomAgentRequest } from "./types";
+  import type { AgentDetails, AgentSummary, CustomAgentCliStyle, UpsertCustomAgentRequest } from "./types";
 
   interface AgentEditorState {
     mode: "create" | "edit";
@@ -18,6 +18,12 @@
       label: string;
       startCommand: string;
       resumeCommand: string;
+      cliStyle?: CustomAgentCliStyle;
+      claude?: {
+        command: string;
+        historyRoot: string;
+        settingsDir: string;
+      };
     };
   }
 
@@ -141,6 +147,7 @@
         label: "",
         startCommand: "",
         resumeCommand: "",
+        cliStyle: "terminal",
       },
     };
   }
@@ -154,6 +161,8 @@
         label: agent.label,
         startCommand: agent.startCommand ?? "",
         resumeCommand: agent.resumeCommand ?? "",
+        cliStyle: agent.cliStyle ?? "terminal",
+        ...(agent.claude ? { claude: agent.claude } : {}),
       },
     };
   }
@@ -166,6 +175,8 @@
         label: `${agent.label} Copy`,
         startCommand: agent.startCommand ?? "",
         resumeCommand: agent.resumeCommand ?? "",
+        cliStyle: agent.cliStyle ?? "terminal",
+        ...(agent.claude ? { claude: agent.claude } : {}),
       },
     };
   }
@@ -283,6 +294,16 @@
                         <p class="mt-1 text-[11px] text-muted font-mono break-all">
                           Resume: {agent.resumeCommand}
                         </p>
+                      {/if}
+                      <p class="mt-2 text-[11px] text-muted">
+                        CLI style: <span class="text-primary">{agent.cliStyle === "claude" ? "Claude-compatible" : "Terminal only"}</span>
+                      </p>
+                      {#if agent.cliStyle === "claude" && agent.claude}
+                        <div class="mt-1 space-y-0.5 text-[11px] text-muted font-mono break-all">
+                          <p>Command: {agent.claude.command}</p>
+                          <p>History: {agent.claude.historyRoot}</p>
+                          <p>Settings: {agent.claude.settingsDir}</p>
+                        </div>
                       {/if}
                     </div>
 

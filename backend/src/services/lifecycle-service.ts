@@ -282,6 +282,9 @@ export class LifecycleService {
       await ensureAgentRuntimeArtifacts({
         gitDir: initialized.paths.gitDir,
         worktreePath: resolved.entry.path,
+        settingsDirs: agent.kind === "custom" && agent.implementation.config.cliStyle === "claude" && agent.implementation.config.claude
+          ? [agent.implementation.config.claude.settingsDir]
+          : [],
       });
 
       await this.materializeRuntimeSession({
@@ -1122,6 +1125,9 @@ export class LifecycleService {
       await ensureAgentRuntimeArtifacts({
         gitDir: initialized.paths.gitDir,
         worktreePath,
+        settingsDirs: agent.kind === "custom" && agent.implementation.config.cliStyle === "claude" && agent.implementation.config.claude
+          ? [agent.implementation.config.claude.settingsDir]
+          : [],
       });
       await this.reportCreateProgress({
         ...createProgressBase,

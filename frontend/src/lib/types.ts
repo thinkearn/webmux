@@ -25,6 +25,8 @@ export type {
   AgentDetails,
   AgentId,
   AgentKind,
+  CustomAgentCliStyle,
+  CustomAgentClaudeConfig,
   BuiltInAgentId,
   AgentListResponse,
   AgentResponse,

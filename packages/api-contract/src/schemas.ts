@@ -70,6 +70,22 @@ export const OneshotConfigSchema = z.object({
   postToLinearOnDone: PostWorktreeToLinearTargetSchema.optional(),
 });
 
+export const CUSTOM_AGENT_DEFAULTS = {
+  cliStyle: "terminal",
+  claude: {
+    command: "claude",
+    historyRoot: "~/.claude/projects",
+    settingsDir: ".claude",
+  },
+} as const;
+
+export const CustomAgentCliStyleSchema = z.enum(["terminal", "claude"]);
+export const CustomAgentClaudeConfigSchema = z.object({
+  command: z.string().trim().min(1).default(CUSTOM_AGENT_DEFAULTS.claude.command),
+  historyRoot: z.string().trim().min(1).default(CUSTOM_AGENT_DEFAULTS.claude.historyRoot),
+  settingsDir: z.string().trim().min(1).default(CUSTOM_AGENT_DEFAULTS.claude.settingsDir),
+});
+
 export const AgentCapabilitiesSchema = z.object({
   terminal: z.literal(true),
   inAppChat: z.boolean(),
@@ -92,6 +108,8 @@ export const AgentDetailsSchema = z.object({
   capabilities: AgentCapabilitiesSchema,
   startCommand: z.string().nullable(),
   resumeCommand: z.string().nullable(),
+  cliStyle: CustomAgentCliStyleSchema.optional(),
+  claude: CustomAgentClaudeConfigSchema.optional(),
 });
 
 export const AgentListResponseSchema = z.object({
@@ -100,8 +118,18 @@ export const AgentListResponseSchema = z.object({
 
 export const UpsertCustomAgentRequestSchema = z.object({
   label: z.string().trim().min(1),
-  startCommand: z.string().trim().min(1),
+  startCommand: z.string().trim().optional(),
   resumeCommand: z.string().trim().optional(),
+  cliStyle: CustomAgentCliStyleSchema.default(CUSTOM_AGENT_DEFAULTS.cliStyle),
+  claude: CustomAgentClaudeConfigSchema.optional(),
+}).superRefine((value, ctx) => {
+  if (value.cliStyle !== "claude" && !value.startCommand?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["startCommand"],
+      message: "Start command is required for terminal-only agents",
+    });
+  }
 });
 
 export const AgentResponseSchema = z.object({
@@ -589,6 +617,8 @@ export type InstancesResponse = z.infer<typeof InstancesResponseSchema>;
 export type BuiltInAgentId = z.infer<typeof BuiltInAgentIdSchema>;
 export type AgentId = z.infer<typeof AgentIdSchema>;
 export type AgentKind = z.infer<typeof AgentKindSchema>;
+export type CustomAgentCliStyle = z.infer<typeof CustomAgentCliStyleSchema>;
+export type CustomAgentClaudeConfig = z.infer<typeof CustomAgentClaudeConfigSchema>;
 export type AgentCapabilities = z.infer<typeof AgentCapabilitiesSchema>;
 export type AgentSummary = z.infer<typeof AgentSummarySchema>;
 export type AgentDetails = z.infer<typeof AgentDetailsSchema>;

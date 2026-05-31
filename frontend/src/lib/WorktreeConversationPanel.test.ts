@@ -129,7 +129,6 @@ describe("WorktreeConversationPanel", () => {
     expect(screen.queryByRole("button", { name: "Interrupt" })).not.toBeInTheDocument();
   });
 
-<<<<<<< HEAD
   it("does not duplicate the stale terminal banner inside chat", () => {
     renderPanel({
       worktree: createWorktree({ agentTerminalStale: true }),

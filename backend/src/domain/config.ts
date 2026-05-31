@@ -2,10 +2,20 @@ export type AgentKind = "claude" | "codex" | "codebuddy";
 export type AgentId = string;
 export type RuntimeKind = "host" | "docker";
 
+export type CustomAgentCliStyle = "terminal" | "claude";
+
+export interface CustomAgentClaudeConfig {
+  command: string;
+  historyRoot: string;
+  settingsDir: string;
+}
+
 export interface CustomAgentConfig {
   label: string;
   startCommand: string;
   resumeCommand?: string;
+  cliStyle?: CustomAgentCliStyle;
+  claude?: CustomAgentClaudeConfig;
 }
 export type PaneKind = "agent" | "shell" | "command";
 export type PaneSplit = "right" | "bottom";

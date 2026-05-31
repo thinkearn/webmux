@@ -301,6 +301,56 @@ describe("agent-service command builders", () => {
     expect(command).toContain('gemini --prompt "$WEBMUX_AGENT_PROMPT" --cwd "$WEBMUX_AGENT_WORKTREE_PATH" --profile "$WEBMUX_AGENT_PROFILE"');
   });
 
+  it("builds Claude-compatible custom agent commands from the CLI command", () => {
+    const agent = customAgent({
+      startCommand: "",
+      id: "codebuddy-cli",
+      label: "CodeBuddy CLI",
+    });
+    if (agent.kind !== "custom") return;
+    agent.capabilities = {
+      terminal: true,
+      inAppChat: true,
+      conversationHistory: true,
+      interrupt: true,
+      resume: true,
+    };
+    agent.implementation.config = {
+      label: "CodeBuddy CLI",
+      startCommand: "",
+      cliStyle: "claude",
+      claude: {
+        command: "codebuddy",
+        historyRoot: "~/.codebuddy/projects",
+        settingsDir: ".codebuddy",
+      },
+    };
+
+    const fresh = buildAgentPaneCommand({
+      agent,
+      runtimeEnvPath: "/tmp/gitdir/webmux/runtime.env",
+      repoRoot: "/repo",
+      worktreePath: "/repo/__worktrees/feature",
+      branch: "feature/search",
+      profileName: "default",
+      systemPrompt: "stay focused",
+      prompt: "fix the tests",
+    });
+    const resume = buildAgentPaneCommand({
+      agent,
+      runtimeEnvPath: "/tmp/gitdir/webmux/runtime.env",
+      repoRoot: "/repo",
+      worktreePath: "/repo/__worktrees/feature",
+      branch: "feature/search",
+      profileName: "default",
+      prompt: "fix the tests",
+      launchMode: "resume",
+    });
+
+    expect(fresh).toContain("codebuddy --append-system-prompt 'stay focused' -- 'fix the tests'");
+    expect(resume).toContain("codebuddy --continue -- 'fix the tests'");
+  });
+
   it("uses a custom agent resume command when available", () => {
     const command = buildAgentPaneCommand({
       agent: customAgent({

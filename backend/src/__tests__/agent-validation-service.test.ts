@@ -15,6 +15,21 @@ describe("validateCustomAgentInput", () => {
     });
   });
 
+  it("returns no warnings for Claude-compatible agents without start or resume commands", () => {
+    expect(validateCustomAgentInput({
+      label: "CodeBuddy CLI",
+      cliStyle: "claude",
+      claude: {
+        command: "codebuddy",
+        historyRoot: "~/.codebuddy/projects",
+        settingsDir: ".codebuddy",
+      },
+    })).toEqual({
+      normalizedId: "codebuddy-cli",
+      warnings: [],
+    });
+  });
+
   it("returns no warnings for prompt-aware commands with resume support", () => {
     expect(validateCustomAgentInput({
       label: "Gemini CLI",

@@ -666,7 +666,7 @@ async function apiAttachAgentsWorktree(branch: string): Promise<Response> {
   }
 
   const result = chatSupport.data.provider === "claude"
-    ? await claudeConversationService.attachWorktreeConversation(resolved.worktree)
+    ? await claudeConversationService.attachWorktreeConversation(resolved.worktree, chatSupport.data.claude)
     : await worktreeConversationService.attachWorktreeConversation(resolved.worktree);
   return result.ok
     ? jsonResponse(result.data)
@@ -684,7 +684,7 @@ async function apiGetAgentsWorktreeHistory(branch: string): Promise<Response> {
   }
 
   const result = chatSupport.data.provider === "claude"
-    ? await claudeConversationService.readWorktreeConversation(resolved.worktree)
+    ? await claudeConversationService.readWorktreeConversation(resolved.worktree, chatSupport.data.claude)
     : await worktreeConversationService.readWorktreeConversation(resolved.worktree);
   return result.ok
     ? jsonResponse(result.data)
@@ -720,7 +720,9 @@ async function apiSendAgentsWorktreeMessage(branch: string, req: Request): Promi
     return jsonResponse(sendResult.data);
   }
 
-  const conversationResult = await claudeConversationService.readWorktreeConversation(resolved.worktree);
+  const conversationResult = chatSupport.data.provider === "claude"
+    ? await claudeConversationService.readWorktreeConversation(resolved.worktree, chatSupport.data.claude)
+    : await worktreeConversationService.readWorktreeConversation(resolved.worktree);
   if (!conversationResult.ok) {
     return errorResponse(conversationResult.error, conversationResult.status);
   }
@@ -769,7 +771,9 @@ async function apiInterruptAgentsWorktree(branch: string): Promise<Response> {
     return jsonResponse(interruptResult.data);
   }
 
-  const conversationResult = await claudeConversationService.readWorktreeConversation(resolved.worktree);
+  const conversationResult = chatSupport.data.provider === "claude"
+    ? await claudeConversationService.readWorktreeConversation(resolved.worktree, chatSupport.data.claude)
+    : await worktreeConversationService.readWorktreeConversation(resolved.worktree);
   if (!conversationResult.ok) {
     return errorResponse(conversationResult.error, conversationResult.status);
   }
@@ -820,7 +824,7 @@ async function loadAgentsConversationInitialState(
   }
 
   const result = chatSupport.data.provider === "claude"
-    ? await claudeConversationService.readWorktreeConversation(resolved.worktree)
+    ? await claudeConversationService.readWorktreeConversation(resolved.worktree, chatSupport.data.claude)
     : await worktreeConversationService.readWorktreeConversation(resolved.worktree);
   return result.ok
     ? { ok: true, data: result.data }
@@ -1224,8 +1228,10 @@ async function apiCreateAgent(req: Request): Promise<Response> {
 
   const agentConfig = {
     label: body.label,
-    startCommand: body.startCommand,
+    startCommand: body.startCommand ?? "",
     ...(body.resumeCommand?.trim() ? { resumeCommand: body.resumeCommand.trim() } : {}),
+    ...(body.cliStyle === "claude" ? { cliStyle: body.cliStyle } : {}),
+    ...(body.cliStyle === "claude" && body.claude ? { claude: body.claude } : {}),
   };
 
   await persistLocalCustomAgent(PROJECT_DIR, agentId, agentConfig);
@@ -1252,8 +1258,10 @@ async function apiUpdateAgent(agentId: string, req: Request): Promise<Response> 
   const body = parsed.data;
   const agentConfig = {
     label: body.label,
-    startCommand: body.startCommand,
+    startCommand: body.startCommand ?? "",
     ...(body.resumeCommand?.trim() ? { resumeCommand: body.resumeCommand.trim() } : {}),
+    ...(body.cliStyle === "claude" ? { cliStyle: body.cliStyle } : {}),
+    ...(body.cliStyle === "claude" && body.claude ? { claude: body.claude } : {}),
   };
 
   await persistLocalCustomAgent(PROJECT_DIR, agentId, agentConfig);
@@ -1373,7 +1381,7 @@ async function postWorktreeConversationToLinear(
   if (!chatSupport.ok) return { ok: false, error: chatSupport.error, status: chatSupport.status };
 
   const conversationResult = chatSupport.data.provider === "claude"
-    ? await claudeConversationService.readWorktreeConversation(resolved.worktree)
+    ? await claudeConversationService.readWorktreeConversation(resolved.worktree, chatSupport.data.claude)
     : await worktreeConversationService.readWorktreeConversation(resolved.worktree);
   if (!conversationResult.ok) return { ok: false, error: conversationResult.error, status: conversationResult.status };
 
