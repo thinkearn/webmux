@@ -55,6 +55,8 @@ export function createWebmuxRuntime(options: WebmuxRuntimeOptions = {}): WebmuxR
   const runtimeNotifications = new RuntimeNotificationService();
   const reconciliationService = new ReconciliationService({
     config,
+    controlBaseUrl: `http://127.0.0.1:${port}`,
+    getControlToken: loadControlToken,
     git,
     tmux,
     portProbe,

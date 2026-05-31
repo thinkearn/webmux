@@ -266,6 +266,8 @@ function makeLifecycleService(
 ): LifecycleService {
   const reconciliation = new ReconciliationService({
     config,
+    controlBaseUrl: "http://127.0.0.1:5111",
+    getControlToken: async () => "secret-token",
     git,
     tmux,
     portProbe: new FakePortProbe(),
@@ -1302,7 +1304,6 @@ describe("LifecycleService", () => {
     const gitDir = new BunGitGateway().resolveWorktreeGitDir(worktreePath);
     const paths = getWorktreeStoragePaths(gitDir);
     await Bun.write(paths.runtimeEnvPath, "runtime-marker\n");
-    await Bun.write(paths.controlEnvPath, "control-marker\n");
     const allocatedPorts = { ...(await readWorktreeMeta(gitDir))?.allocatedPorts };
     const labeled = await lifecycle.setWorktreeLabel("feature-label", "  Search ranking  ");
 
@@ -1310,7 +1311,7 @@ describe("LifecycleService", () => {
     expect((await readWorktreeMeta(gitDir))?.label).toBe("Search ranking");
     expect(runtime.getWorktreeByBranch("feature-label")?.label).toBe("Search ranking");
     expect(await Bun.file(paths.runtimeEnvPath).text()).toBe("runtime-marker\n");
-    expect(await Bun.file(paths.controlEnvPath).text()).toBe("control-marker\n");
+    expect(await Bun.file(paths.controlEnvPath).text()).toContain("WEBMUX_CONTROL_URL=http://127.0.0.1:5111/api/runtime/events");
     expect((await readWorktreeMeta(gitDir))?.allocatedPorts).toEqual(allocatedPorts);
 
     const cleared = await lifecycle.setWorktreeLabel("feature-label", "");
@@ -1319,7 +1320,7 @@ describe("LifecycleService", () => {
     expect((await readWorktreeMeta(gitDir))?.label).toBeUndefined();
     expect(runtime.getWorktreeByBranch("feature-label")?.label).toBeNull();
     expect(await Bun.file(paths.runtimeEnvPath).text()).toBe("runtime-marker\n");
-    expect(await Bun.file(paths.controlEnvPath).text()).toBe("control-marker\n");
+    expect(await Bun.file(paths.controlEnvPath).text()).toContain("WEBMUX_CONTROL_URL=http://127.0.0.1:5111/api/runtime/events");
     expect((await readWorktreeMeta(gitDir))?.allocatedPorts).toEqual(allocatedPorts);
   });
 
