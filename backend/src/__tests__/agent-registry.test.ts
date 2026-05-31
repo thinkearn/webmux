@@ -79,8 +79,8 @@ describe("agent-registry", () => {
         kind: "builtin",
         capabilities: {
           terminal: true,
-          inAppChat: false,
-          conversationHistory: false,
+          inAppChat: true,
+          conversationHistory: true,
           interrupt: true,
           resume: true,
         },
@@ -189,8 +189,8 @@ describe("agent-registry", () => {
         kind: "builtin",
         capabilities: {
           terminal: true,
-          inAppChat: false,
-          conversationHistory: false,
+          inAppChat: true,
+          conversationHistory: true,
           interrupt: true,
           resume: true,
         },

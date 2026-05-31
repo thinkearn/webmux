@@ -59,7 +59,21 @@ export function resolveAgentChatSupport(input: {
     };
   }
 
-  if (input.agent.kind === "builtin" && input.agent.implementation.agent !== "codebuddy") {
+  if (input.agent.kind === "builtin") {
+    if (input.agent.implementation.agent === "codebuddy") {
+      return {
+        ok: true,
+        data: {
+          provider: "claude",
+          submitDelayMs: 0,
+          claude: {
+            command: "codebuddy",
+            historyRoot: "~/.codebuddy/projects",
+            settingsDir: ".codebuddy",
+          },
+        },
+      };
+    }
     return {
       ok: true,
       data: {

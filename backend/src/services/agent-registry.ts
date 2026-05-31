@@ -72,8 +72,8 @@ const BUILTIN_AGENT_DEFINITIONS: AgentDefinition[] = [
     kind: "builtin",
     capabilities: {
       terminal: true,
-      inAppChat: false,
-      conversationHistory: false,
+      inAppChat: true,
+      conversationHistory: true,
       interrupt: true,
       resume: true,
     },

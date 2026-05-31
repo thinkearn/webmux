@@ -62,6 +62,24 @@ describe("resolveAgentChatSupport", () => {
         submitDelayMs: 200,
       },
     });
+
+    expect(resolveAgentChatSupport({
+      agentId: "codebuddy",
+      agentLabel: "CodeBuddy",
+      agent: getAgentDefinition(TEST_CONFIG, "codebuddy"),
+      action: "chat",
+    })).toEqual({
+      ok: true,
+      data: {
+        provider: "claude",
+        submitDelayMs: 0,
+        claude: {
+          command: "codebuddy",
+          historyRoot: "~/.codebuddy/projects",
+          settingsDir: ".codebuddy",
+        },
+      },
+    });
   });
 
   it("maps Claude-compatible custom agents to the Claude dashboard chat provider", () => {
