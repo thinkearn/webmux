@@ -3,7 +3,7 @@ import { expandTemplate } from "../adapters/config";
 import type { GitGateway, GitWorktreeEntry } from "../adapters/git";
 import type { PortProbe } from "../adapters/port-probe";
 import { buildProjectSessionName, buildWorktreeWindowName, type TmuxGateway, type TmuxWindowSummary } from "../adapters/tmux";
-import { buildRuntimeEnvMap, readWorktreeMeta, readWorktreePrs } from "../adapters/fs";
+import { buildControlEnvMap, buildRuntimeEnvMap, readWorktreeMeta, readWorktreePrs, writeControlEnv } from "../adapters/fs";
 import type { AgentId, ProjectConfig } from "../domain/config";
 import type { OneshotMeta, PrEntry, ServiceRuntimeState, WorktreeSource } from "../domain/model";
 import { mapWithConcurrency } from "../lib/async";
@@ -75,6 +75,8 @@ function resolveBranch(entry: GitWorktreeEntry, metaBranch: string | null): stri
 
 export interface ReconciliationServiceDependencies {
   config: ProjectConfig;
+  controlBaseUrl: string;
+  getControlToken: () => Promise<string>;
   git: GitGateway;
   tmux: TmuxGateway;
   portProbe: PortProbe;
@@ -213,8 +215,34 @@ export class ReconciliationService {
       } satisfies ReconciledWorktreeState;
     });
 
+    const controlToken = await this.deps.getControlToken();
+    const controlBaseUrl = this.deps.controlBaseUrl.replace(/\/+$/, "");
+
     for (const state of reconciledStates) {
       seenWorktreeIds.add(state.worktreeId);
+
+      // Refresh control.env so hooks send events to the current webmux instance.
+      if (state.worktreeId !== makeUnmanagedWorktreeId(state.path)) {
+        let baseUrl = controlBaseUrl;
+        if (state.runtime === "docker") {
+          try {
+            const url = new URL(baseUrl);
+            if (url.hostname === "127.0.0.1" || url.hostname === "localhost" || url.hostname === "::1" || url.hostname === "[::1]") {
+              url.hostname = "host.docker.internal";
+              baseUrl = url.toString().replace(/\/+$/, "");
+            }
+          } catch {
+            // Keep original baseUrl if URL parsing fails.
+          }
+        }
+        const gitDir = this.deps.git.resolveWorktreeGitDir(state.path);
+        await writeControlEnv(gitDir, buildControlEnvMap({
+          controlUrl: `${baseUrl}/api/runtime/events`,
+          controlToken,
+          worktreeId: state.worktreeId,
+          branch: state.branch,
+        }));
+      }
 
       this.deps.runtime.upsertWorktree({
         worktreeId: state.worktreeId,

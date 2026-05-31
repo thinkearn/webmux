@@ -281,6 +281,8 @@ describe("ReconciliationService", () => {
 
     const service = new ReconciliationService({
       config: TEST_CONFIG,
+      controlBaseUrl: "http://127.0.0.1:5111",
+      getControlToken: async () => "test-token",
       git,
       tmux,
       portProbe: new FakePortProbe(new Set([3010])),
@@ -362,6 +364,8 @@ describe("ReconciliationService", () => {
 
     const service = new ReconciliationService({
       config: TEST_CONFIG,
+      controlBaseUrl: "http://127.0.0.1:5111",
+      getControlToken: async () => "test-token",
       git,
       tmux: new FakeTmuxGateway([]),
       portProbe: new FakePortProbe(new Set([3010])),
@@ -391,6 +395,8 @@ describe("ReconciliationService", () => {
 
     const service = new ReconciliationService({
       config: TEST_CONFIG,
+      controlBaseUrl: "http://127.0.0.1:5111",
+      getControlToken: async () => "test-token",
       git,
       tmux,
       portProbe: new FakePortProbe(),
@@ -457,6 +463,8 @@ describe("ReconciliationService", () => {
     const service = new ReconciliationService(
       {
         config: TEST_CONFIG,
+        controlBaseUrl: "http://127.0.0.1:5111",
+        getControlToken: async () => "test-token",
         git,
         tmux: new FakeTmuxGateway([]),
         portProbe,
