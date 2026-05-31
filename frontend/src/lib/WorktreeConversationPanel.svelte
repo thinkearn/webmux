@@ -39,6 +39,7 @@
     onSend,
   }: Props = $props();
 
+  const activeApprovalPrompt = $derived(worktree.approvalPrompt ?? conversation?.approvalPrompt ?? null);
   const agentLabel = $derived(worktree.agentLabel ?? worktree.agentName ?? "Agent");
   const supportsAgentChat = $derived(worktree.agentName !== null);
   const chatAvailable = $derived(supportsAgentChat && worktree.mux === "✓");
@@ -239,10 +240,10 @@
       </div>
     {/if}
 
-    {#if conversation?.approvalPrompt}
+    {#if activeApprovalPrompt}
       <div class="mx-4 mt-4 rounded-md border border-accent/40 bg-accent/10 px-4 py-3 text-sm text-primary">
-        <div class="font-medium">{conversation.approvalPrompt.title}</div>
-        <div class="mt-1 whitespace-pre-wrap break-words">{conversation.approvalPrompt.message}</div>
+        <div class="font-medium">{activeApprovalPrompt.title}</div>
+        <div class="mt-1 whitespace-pre-wrap break-words">{activeApprovalPrompt.message}</div>
         <div class="mt-2 text-xs text-muted">Approve or deny it in the terminal.</div>
       </div>
     {/if}

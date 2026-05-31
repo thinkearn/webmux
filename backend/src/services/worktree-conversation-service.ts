@@ -547,6 +547,7 @@ function buildConversationMessages(thread: CodexAppServerThread): AgentsUiConver
 export function buildConversationState(
   thread: CodexAppServerThread,
   sessionMessages: AgentsUiConversationMessage[] = [],
+  worktree?: WorktreeSnapshot,
 ): AgentsUiConversationState {
   const activeTurn = findActiveTurn(thread);
   const messages = sessionMessages.length > 0 ? sessionMessages : buildConversationMessages(thread);
@@ -556,7 +557,7 @@ export function buildConversationState(
     cwd: thread.cwd,
     running: thread.status.type === "active" || activeTurn !== null,
     activeTurnId: activeTurn?.id ?? null,
-    approvalPrompt: null,
+    approvalPrompt: worktree?.approvalPrompt ?? null,
     messages,
   };
 }
@@ -592,7 +593,7 @@ function toWorktreeConversationResponse(
 ): AgentsUiWorktreeConversationResponse {
   return {
     worktree: buildAgentsUiWorktreeSummary(worktree, conversationMeta),
-    conversation: buildConversationState(thread, sessionMessages),
+    conversation: buildConversationState(thread, sessionMessages, worktree),
   };
 }
 
@@ -650,7 +651,7 @@ export class WorktreeConversationService {
     worktree: WorktreeSnapshot,
   ): Promise<WorktreeConversationResult<AgentsUiInterruptResponse>> {
     return await this.withResolvedConversation(worktree, false, async ({ thread }) => {
-      const conversation = buildConversationState(thread);
+      const conversation = buildConversationState(thread, [], worktree);
       const turnId = conversation.activeTurnId;
       if (!turnId) {
         return err(409, "No active Codex turn to interrupt");
