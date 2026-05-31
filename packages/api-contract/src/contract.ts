@@ -117,8 +117,7 @@ export const apiContract = c.router({
     query: AvailableBranchesQuerySchema,
     responses: {
       200: BranchListResponseSchema,
-      400: ErrorResponseSchema,
-      500: ErrorResponseSchema,
+      ...commonErrorResponses,
     },
   },
   fetchBaseBranches: {
@@ -126,7 +125,7 @@ export const apiContract = c.router({
     path: apiPaths.fetchBaseBranches,
     responses: {
       200: BranchListResponseSchema,
-      500: ErrorResponseSchema,
+      ...commonErrorResponses,
     },
   },
   fetchProject: {
@@ -134,8 +133,7 @@ export const apiContract = c.router({
     path: apiPaths.fetchProject,
     responses: {
       200: ProjectSnapshotSchema,
-      500: ErrorResponseSchema,
-      502: ErrorResponseSchema,
+      ...commonErrorResponses,
     },
   },
   fetchAgents: {
@@ -143,7 +141,7 @@ export const apiContract = c.router({
     path: apiPaths.fetchAgents,
     responses: {
       200: AgentListResponseSchema,
-      500: ErrorResponseSchema,
+      ...commonErrorResponses,
     },
   },
   createAgent: {
@@ -152,9 +150,7 @@ export const apiContract = c.router({
     body: UpsertCustomAgentRequestSchema,
     responses: {
       200: AgentResponseSchema,
-      400: ErrorResponseSchema,
-      409: ErrorResponseSchema,
-      500: ErrorResponseSchema,
+      ...commonErrorResponses,
     },
   },
   updateAgent: {
@@ -164,10 +160,7 @@ export const apiContract = c.router({
     body: UpsertCustomAgentRequestSchema,
     responses: {
       200: AgentResponseSchema,
-      400: ErrorResponseSchema,
-      404: ErrorResponseSchema,
-      409: ErrorResponseSchema,
-      500: ErrorResponseSchema,
+      ...commonErrorResponses,
     },
   },
   deleteAgent: {
@@ -177,9 +170,7 @@ export const apiContract = c.router({
     body: c.noBody(),
     responses: {
       200: OkResponseSchema,
-      400: ErrorResponseSchema,
-      404: ErrorResponseSchema,
-      500: ErrorResponseSchema,
+      ...commonErrorResponses,
     },
   },
   validateAgent: {
@@ -188,8 +179,7 @@ export const apiContract = c.router({
     body: UpsertCustomAgentRequestSchema,
     responses: {
       200: ValidateCustomAgentResponseSchema,
-      400: ErrorResponseSchema,
-      500: ErrorResponseSchema,
+      ...commonErrorResponses,
     },
   },
   attachAgentsWorktreeConversation: {
@@ -311,8 +301,7 @@ export const apiContract = c.router({
     path: apiPaths.fetchWorktrees,
     responses: {
       200: WorktreeListResponseSchema,
-      500: ErrorResponseSchema,
-      502: ErrorResponseSchema,
+      ...commonErrorResponses,
     },
   },
   createWorktree: {
@@ -437,8 +426,7 @@ export const apiContract = c.router({
     path: apiPaths.fetchLinearIssues,
     responses: {
       200: LinearIssuesResponseSchema,
-      500: ErrorResponseSchema,
-      502: ErrorResponseSchema,
+      ...commonErrorResponses,
     },
   },
   fetchAutoNameConfig: {
@@ -446,7 +434,7 @@ export const apiContract = c.router({
     path: apiPaths.fetchAutoNameConfig,
     responses: {
       200: AutoNameConfigResponseSchema,
-      500: ErrorResponseSchema,
+      ...commonErrorResponses,
     },
   },
   setLinearAutoCreate: {
@@ -492,8 +480,7 @@ export const apiContract = c.router({
     body: c.noBody(),
     responses: {
       200: OkResponseSchema,
-      400: ErrorResponseSchema,
-      404: ErrorResponseSchema,
+      ...commonErrorResponses,
     },
   },
   fetchInstances: {
@@ -501,7 +488,7 @@ export const apiContract = c.router({
     path: apiPaths.fetchInstances,
     responses: {
       200: InstancesResponseSchema,
-      500: ErrorResponseSchema,
+      ...commonErrorResponses,
     },
   },
 }, {
