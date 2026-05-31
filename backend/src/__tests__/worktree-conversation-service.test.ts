@@ -194,6 +194,7 @@ function makeWorktree(): WorktreeSnapshot {
     paneCount: 1,
     status: "idle",
     elapsed: "1m",
+    approvalPrompt: null,
     services: [],
     prs: [],
     linearIssue: null,
@@ -296,6 +297,7 @@ describe("buildConversationState", () => {
       cwd: "/tmp/worktree",
       running: false,
       activeTurnId: null,
+      approvalPrompt: null,
       messages: [
         {
           id: "user-1",
@@ -730,6 +732,7 @@ describe("buildConversationState", () => {
       cwd: "/tmp/worktree",
       running: false,
       activeTurnId: null,
+      approvalPrompt: null,
       messages: [
         {
           id: "user-2",

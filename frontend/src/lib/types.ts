@@ -1,5 +1,6 @@
 import type {
   AgentId,
+  AgentsUiApprovalPrompt,
   BuiltInAgentId,
   LinkedLinearIssue,
   OneshotConfig,
@@ -10,6 +11,7 @@ import type {
 } from "@webmux/api-contract";
 
 export type {
+  AgentsUiApprovalPrompt,
   AgentsUiConversationEvent,
   AgentsUiConversationMessage,
   AgentsUiConversationMessageDeltaEvent,
@@ -95,6 +97,7 @@ export interface WorktreeInfo {
   unpushed: boolean;
   status: string;
   elapsed: string;
+  approvalPrompt: AgentsUiApprovalPrompt | null;
   profile: string | null;
   agentName: AgentId | null;
   agentLabel: string | null;

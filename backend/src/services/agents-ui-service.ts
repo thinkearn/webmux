@@ -20,6 +20,7 @@ export function buildAgentsUiWorktreeSummary(
     agentTerminalStale: worktree.agentTerminalStale,
     mux: worktree.mux,
     status: worktree.status,
+    approvalPrompt: worktree.approvalPrompt,
     dirty: worktree.dirty,
     unpushed: worktree.unpushed,
     services: worktree.services.map((service) => ({ ...service })),

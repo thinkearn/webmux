@@ -16,6 +16,7 @@ function makeConversation(): AgentsUiConversationState {
     cwd: "/tmp/worktree",
     running: false,
     activeTurnId: null,
+    approvalPrompt: null,
     messages: [
       {
         id: "user-1",

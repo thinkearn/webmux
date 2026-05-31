@@ -60,6 +60,7 @@ function makeWorktree(): WorktreeSnapshot {
     paneCount: 1,
     status: "idle",
     elapsed: "1m",
+    approvalPrompt: null,
     services: [],
     prs: [],
     linearIssue: null,
@@ -139,6 +140,7 @@ describe("ClaudeConversationService", () => {
     expect(result.data.conversation.provider).toBe("claudeCode");
     expect(result.data.conversation.conversationId).toBe("session-existing");
     expect(result.data.conversation.running).toBe(false);
+    expect(result.data.conversation.approvalPrompt).toBeNull();
     expect(result.data.conversation.messages).toHaveLength(2);
     expect(metaStore.get(gitDir)?.conversation).toEqual({
       provider: "claudeCode",
@@ -147,5 +149,35 @@ describe("ClaudeConversationService", () => {
       cwd: worktree.path,
       lastSeenAt: "2026-04-14T12:00:00.000Z",
     });
+  });
+
+  it("includes an active approval prompt in the conversation response", async () => {
+    const metaStore = new Map<string, WorktreeMeta>();
+    const worktree = makeWorktree();
+    worktree.approvalPrompt = {
+      id: "approval-1",
+      kind: "permission_prompt",
+      title: "Approval required",
+      message: "Claude wants to run Bash: bun test",
+      createdAt: "2026-04-14T10:03:00.000Z",
+    };
+    const gitDir = `${worktree.path}/.git`;
+    metaStore.set(gitDir, makeMeta());
+
+    const claude = new FakeClaudeCliGateway();
+    const service = new ClaudeConversationService({
+      claude,
+      git: new FakeGitGateway(),
+      readMeta: async (path) => structuredClone(metaStore.get(path) ?? null),
+      writeMeta: async (path, meta) => {
+        metaStore.set(path, structuredClone(meta));
+      },
+    });
+
+    const result = await service.attachWorktreeConversation(worktree);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+
+    expect(result.data.conversation.approvalPrompt).toEqual(worktree.approvalPrompt);
   });
 });

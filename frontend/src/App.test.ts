@@ -241,6 +241,7 @@ function createWorktree(
     unpushed: false,
     status: "idle",
     elapsed: "1m",
+    approvalPrompt: null,
     profile: null,
     agentName: null,
     agentLabel: null,

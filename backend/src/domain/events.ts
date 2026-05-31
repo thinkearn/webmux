@@ -1,6 +1,9 @@
+export type AgentApprovalPromptKind = "permission_prompt" | "elicitation_dialog" | "unknown";
+
 export type RuntimeEventType =
   | "agent_stopped"
   | "agent_status_changed"
+  | "agent_approval_requested"
   | "pr_opened"
   | "runtime_error";
 
@@ -19,6 +22,12 @@ export interface AgentStatusChangedEvent extends RuntimeEventBase {
   lifecycle: "starting" | "running" | "idle" | "stopped";
 }
 
+export interface AgentApprovalRequestedEvent extends RuntimeEventBase {
+  type: "agent_approval_requested";
+  kind: AgentApprovalPromptKind;
+  message?: string;
+}
+
 export interface PrOpenedEvent extends RuntimeEventBase {
   type: "pr_opened";
   url?: string;
@@ -32,6 +41,7 @@ export interface RuntimeErrorEvent extends RuntimeEventBase {
 export type RuntimeEvent =
   | AgentStoppedEvent
   | AgentStatusChangedEvent
+  | AgentApprovalRequestedEvent
   | PrOpenedEvent
   | RuntimeErrorEvent;
 
@@ -41,7 +51,11 @@ function hasBaseFields(raw: Record<string, unknown>): raw is Record<string, stri
     && typeof raw.branch === "string"
     && raw.branch.length > 0
     && typeof raw.type === "string"
-    && ["agent_stopped", "agent_status_changed", "pr_opened", "runtime_error"].includes(raw.type);
+    && ["agent_stopped", "agent_status_changed", "agent_approval_requested", "pr_opened", "runtime_error"].includes(raw.type);
+}
+
+function isAgentApprovalPromptKind(value: unknown): value is AgentApprovalPromptKind {
+  return value === "permission_prompt" || value === "elicitation_dialog" || value === "unknown";
 }
 
 export function parseRuntimeEvent(raw: unknown): RuntimeEvent | null {
@@ -71,6 +85,17 @@ export function parseRuntimeEvent(raw: unknown): RuntimeEvent | null {
             branch: event.branch,
             type: event.type,
             lifecycle: event.lifecycle,
+          }
+        : null;
+    case "agent_approval_requested":
+      return isAgentApprovalPromptKind(event.kind)
+          && (typeof event.message === "string" || event.message === undefined)
+        ? {
+            worktreeId: event.worktreeId,
+            branch: event.branch,
+            type: event.type,
+            kind: event.kind,
+            ...(typeof event.message === "string" ? { message: event.message } : {}),
           }
         : null;
     case "pr_opened":

@@ -85,6 +85,15 @@ export interface ControlEnvMap extends Record<string, string> {
 }
 
 export type AgentLifecycle = "closed" | "starting" | "running" | "idle" | "stopped" | "error";
+export type AgentApprovalPromptKind = "permission_prompt" | "elicitation_dialog" | "unknown";
+
+export interface AgentApprovalPrompt {
+  id: string;
+  kind: AgentApprovalPromptKind;
+  title: string;
+  message: string;
+  createdAt: string;
+}
 
 export interface GitWorktreeRuntimeState {
   exists: boolean;
@@ -107,6 +116,7 @@ export interface AgentRuntimeState {
   lastStartedAt: string | null;
   lastEventAt: string | null;
   lastError: string | null;
+  approvalPrompt: AgentApprovalPrompt | null;
 }
 
 export interface ServiceRuntimeState {
@@ -222,6 +232,7 @@ export interface WorktreeSnapshot {
   paneCount: number;
   status: string;
   elapsed: string;
+  approvalPrompt: AgentApprovalPrompt | null;
   services: ServiceRuntimeState[];
   prs: PrEntry[];
   linearIssue: LinkedLinearIssue | null;

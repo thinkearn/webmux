@@ -33,6 +33,7 @@ function makeState(overrides: Partial<ManagedWorktreeRuntimeState> = {}): Manage
       lastStartedAt: null,
       lastEventAt: null,
       lastError: null,
+      approvalPrompt: null,
     },
     services: [],
     prs: [],

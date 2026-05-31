@@ -318,6 +318,15 @@ export const WorktreeCreationStateSchema = z.object({
   phase: WorktreeCreationPhaseSchema,
 });
 
+export const AgentsUiApprovalPromptKindSchema = z.enum(["permission_prompt", "elicitation_dialog", "unknown"]);
+export const AgentsUiApprovalPromptSchema = z.object({
+  id: z.string(),
+  kind: AgentsUiApprovalPromptKindSchema,
+  title: z.string(),
+  message: z.string(),
+  createdAt: z.string(),
+});
+
 export const AppNotificationSchema = z.object({
   id: z.number(),
   branch: z.string(),
@@ -344,6 +353,7 @@ export const ProjectWorktreeSnapshotSchema = z.object({
   paneCount: z.number(),
   status: z.string(),
   elapsed: z.string(),
+  approvalPrompt: AgentsUiApprovalPromptSchema.nullable(),
   services: z.array(ServiceStatusSchema),
   prs: z.array(PrEntrySchema),
   linearIssue: LinkedLinearIssueSchema.nullable(),
@@ -398,6 +408,7 @@ export const AgentsUiWorktreeSummarySchema = z.object({
   agentTerminalStale: z.boolean(),
   mux: z.boolean(),
   status: z.string(),
+  approvalPrompt: AgentsUiApprovalPromptSchema.nullable(),
   dirty: z.boolean(),
   unpushed: z.boolean(),
   services: z.array(ServiceStatusSchema),
@@ -435,6 +446,7 @@ export const AgentsUiConversationStateSchema = z.object({
   cwd: z.string(),
   running: z.boolean(),
   activeTurnId: z.string().nullable(),
+  approvalPrompt: AgentsUiApprovalPromptSchema.nullable(),
   messages: z.array(AgentsUiConversationMessageSchema),
 });
 
@@ -630,6 +642,8 @@ export type CodexWorktreeConversationRef = z.infer<typeof CodexWorktreeConversat
 export type ClaudeWorktreeConversationRef = z.infer<typeof ClaudeWorktreeConversationRefSchema>;
 export type WorktreeConversationRef = z.infer<typeof WorktreeConversationRefSchema>;
 export type AgentsUiWorktreeSummary = z.infer<typeof AgentsUiWorktreeSummarySchema>;
+export type AgentsUiApprovalPromptKind = z.infer<typeof AgentsUiApprovalPromptKindSchema>;
+export type AgentsUiApprovalPrompt = z.infer<typeof AgentsUiApprovalPromptSchema>;
 export type AgentsUiConversationMessageRole = z.infer<typeof AgentsUiConversationMessageRoleSchema>;
 export type AgentsUiConversationMessageStatus = z.infer<typeof AgentsUiConversationMessageStatusSchema>;
 export type AgentsUiConversationMessageKind = z.infer<typeof AgentsUiConversationMessageKindSchema>;

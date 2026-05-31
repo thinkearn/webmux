@@ -239,6 +239,14 @@
       </div>
     {/if}
 
+    {#if conversation?.approvalPrompt}
+      <div class="mx-4 mt-4 rounded-md border border-accent/40 bg-accent/10 px-4 py-3 text-sm text-primary">
+        <div class="font-medium">{conversation.approvalPrompt.title}</div>
+        <div class="mt-1 whitespace-pre-wrap break-words">{conversation.approvalPrompt.message}</div>
+        <div class="mt-2 text-xs text-muted">Approve or deny it in the terminal.</div>
+      </div>
+    {/if}
+
     <div class="flex min-h-0 flex-1 flex-col px-4 pt-4">
       <div bind:this={transcriptViewport} class="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto overflow-x-hidden pb-4 pr-1">
         {#if conversationLoading && !conversation}

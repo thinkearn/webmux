@@ -53,7 +53,7 @@ describe("ensureAgentRuntimeArtifacts", () => {
     expect(settings.hooks?.UserPromptSubmit?.[0]?.hooks?.[0]?.command).toContain("webmux-agentctl");
     expect(settings.hooks?.UserPromptSubmit?.[0]?.hooks?.[0]?.command).toContain("claude-user-prompt-submit");
     expect(settings.hooks?.Notification?.[0]?.matcher).toBe("permission_prompt|elicitation_dialog");
-    expect(settings.hooks?.Notification?.[0]?.hooks?.[0]?.command).toContain("status-changed --lifecycle idle");
+    expect(settings.hooks?.Notification?.[0]?.hooks?.[0]?.command).toContain("claude-approval-requested");
     expect(settings.hooks?.Stop?.[0]?.hooks?.[0]?.command).toContain("agent-stopped");
     expect(settings.hooks?.PostToolUse?.[0]?.hooks?.[0]?.command).toContain("status-changed --lifecycle running");
     expect(settings.hooks?.PostToolUse?.[1]?.hooks?.[0]?.command).toContain("claude-post-tool-use");
@@ -80,7 +80,9 @@ describe("ensureAgentRuntimeArtifacts", () => {
     expect(codexHooks.hooks?.PostToolUse?.[0]?.matcher).toBe("Bash");
     expect(codexHooks.hooks?.PostToolUse?.[0]?.hooks?.[0]?.command).toContain("codex-post-tool-use");
     expect(codexHooks.hooks?.PostToolUse?.[0]?.hooks?.[0]?.timeout).toBe(30);
-    expect(await Bun.file(join(gitDir, "info", "exclude")).text()).toContain(".codex/hooks.json");
+    const excludeText = await Bun.file(join(gitDir, "info", "exclude")).text();
+    expect(excludeText).toContain(".codex/hooks.json");
+    expect(excludeText).toContain(".codebuddy/settings.local.json");
   });
 
   it("preserves non-webmux Codex hooks when refreshing generated hooks", async () => {

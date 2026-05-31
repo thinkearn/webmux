@@ -54,6 +54,44 @@ describe("ProjectRuntime", () => {
     expect(state?.agent.lastEventAt).toBe("2026-03-06T10:03:00.000Z");
   });
 
+  it("stores and clears approval prompts from runtime events", () => {
+    const runtime = new ProjectRuntime();
+    runtime.upsertWorktree({
+      worktreeId: "wt_search",
+      branch: "feature/search",
+      path: "/repo/__worktrees/feature-search",
+      runtime: "host",
+    });
+
+    runtime.applyEvent(
+      {
+        worktreeId: "wt_search",
+        branch: "feature/search",
+        type: "agent_approval_requested",
+        kind: "permission_prompt",
+        message: "Claude wants to run Bash: bun test",
+      },
+      () => new Date("2026-03-06T10:02:00.000Z"),
+    );
+
+    const waiting = runtime.getWorktree("wt_search");
+    expect(waiting?.agent.lifecycle).toBe("idle");
+    expect(waiting?.agent.approvalPrompt).toEqual({
+      id: "2026-03-06T10:02:00.000Z:permission_prompt",
+      kind: "permission_prompt",
+      title: "Approval required",
+      message: "Claude wants to run Bash: bun test",
+      createdAt: "2026-03-06T10:02:00.000Z",
+    });
+
+    runtime.applyEvent(
+      { worktreeId: "wt_search", branch: "feature/search", type: "agent_status_changed", lifecycle: "running" },
+      () => new Date("2026-03-06T10:03:00.000Z"),
+    );
+
+    expect(runtime.getWorktree("wt_search")?.agent.approvalPrompt).toBeNull();
+  });
+
   it("tracks runtime errors and service/session updates", () => {
     const runtime = new ProjectRuntime();
     runtime.upsertWorktree({

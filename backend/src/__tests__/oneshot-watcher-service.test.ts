@@ -41,6 +41,7 @@ function makeWorktree(overrides: {
       lastStartedAt: null,
       lastEventAt: null,
       lastError: null,
+      approvalPrompt: null,
     },
     services: [],
     prs: overrides.prs ?? [],

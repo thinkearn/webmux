@@ -81,6 +81,7 @@ function buildConversationState(
     cwd: worktree.path,
     running: false,
     activeTurnId: null,
+    approvalPrompt: worktree.approvalPrompt,
     messages: normalizeSessionMessages(session?.messages ?? []),
   };
 }

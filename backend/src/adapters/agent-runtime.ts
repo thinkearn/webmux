@@ -2,7 +2,10 @@ import { chmod, mkdir } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { getWorktreeStoragePaths } from "./fs";
 
-const GENERATED_CODEX_HOOKS_EXCLUDE = ".codex/hooks.json";
+const GENERATED_AGENT_SETTINGS_EXCLUDES = [
+  ".codex/hooks.json",
+  ".codebuddy/settings.local.json",
+];
 
 interface CommandHookConfig {
   type: "command";
@@ -79,6 +82,7 @@ def build_parser():
     runtime_error.add_argument("--message", required=True)
 
     subparsers.add_parser("claude-user-prompt-submit")
+    subparsers.add_parser("claude-approval-requested")
     subparsers.add_parser("claude-post-tool-use")
     subparsers.add_parser("codex-session-start")
     subparsers.add_parser("codex-user-prompt-submit")
@@ -101,6 +105,9 @@ def build_payload(command, args, control_env):
     if command == "status-changed":
         payload["type"] = "agent_status_changed"
         payload["lifecycle"] = args.lifecycle
+        return payload
+    if command == "agent_approval_requested":
+        payload["type"] = "agent_approval_requested"
         return payload
     if command == "pr-opened":
         payload["type"] = "pr_opened"
@@ -146,6 +153,47 @@ def find_pr_url(value):
         if match:
             return match.group(0)
     return None
+
+
+def infer_approval_kind(hook_payload):
+    for text in iter_string_values(hook_payload):
+        normalized = text.lower()
+        if "permission_prompt" in normalized:
+            return "permission_prompt"
+        if "elicitation_dialog" in normalized:
+            return "elicitation_dialog"
+    return "unknown"
+
+
+def find_approval_message(value):
+    if not isinstance(value, dict):
+        return None
+
+    for key in ["message", "prompt", "text", "description", "reason"]:
+        candidate = value.get(key)
+        if isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+
+    for child in value.values():
+        if isinstance(child, dict):
+            candidate = find_approval_message(child)
+            if candidate:
+                return candidate
+        if isinstance(child, list):
+            for entry in child:
+                candidate = find_approval_message(entry)
+                if candidate:
+                    return candidate
+    return None
+
+
+def send_claude_approval_requested(hook_payload, control_env):
+    payload = build_payload("agent_approval_requested", argparse.Namespace(), control_env)
+    payload["kind"] = infer_approval_kind(hook_payload)
+    message = find_approval_message(hook_payload)
+    if message:
+        payload["message"] = message
+    return send_payload(payload, control_env)
 
 
 def maybe_send_pr_opened(hook_payload, control_env):
@@ -221,6 +269,10 @@ def main():
             return 1
         return 0
 
+    if parsed.command == "claude-approval-requested":
+        hook_payload = read_hook_payload()
+        return 0 if send_claude_approval_requested(hook_payload, control_env) else 1
+
     if parsed.command == "codex-permission-request":
         send_payload(build_payload("status-changed", argparse.Namespace(lifecycle="idle"), control_env), control_env)
         return 0
@@ -278,7 +330,7 @@ function buildClaudeHookSettings(input: AgentRuntimeArtifacts): HookConfigFile {
           hooks: [
             {
               type: "command",
-              command: `${shellQuote(input.agentCtlPath)} status-changed --lifecycle idle`,
+              command: `${shellQuote(input.agentCtlPath)} claude-approval-requested`,
               async: true,
             },
           ],
@@ -482,7 +534,7 @@ async function resolveGitCommonDir(gitDir: string): Promise<string> {
   }
 }
 
-async function ensureGeneratedCodexHooksIgnored(gitDir: string): Promise<void> {
+async function ensureGeneratedAgentSettingsIgnored(gitDir: string): Promise<void> {
   const commonDir = await resolveGitCommonDir(gitDir);
   const excludePath = join(commonDir, "info", "exclude");
   let existing = "";
@@ -494,11 +546,12 @@ async function ensureGeneratedCodexHooksIgnored(gitDir: string): Promise<void> {
   }
 
   const lines = existing.split(/\r?\n/).map((line) => line.trim());
-  if (lines.includes(GENERATED_CODEX_HOOKS_EXCLUDE)) return;
+  const missingExcludes = GENERATED_AGENT_SETTINGS_EXCLUDES.filter((exclude) => !lines.includes(exclude));
+  if (missingExcludes.length === 0) return;
 
   await mkdir(dirname(excludePath), { recursive: true });
   const separator = existing.length > 0 && !existing.endsWith("\n") ? "\n" : "";
-  await Bun.write(excludePath, `${existing}${separator}${GENERATED_CODEX_HOOKS_EXCLUDE}\n`);
+  await Bun.write(excludePath, `${existing}${separator}${missingExcludes.join("\n")}\n`);
 }
 
 export async function ensureAgentRuntimeArtifacts(input: {
@@ -527,7 +580,7 @@ export async function ensureAgentRuntimeArtifacts(input: {
   }
   await mergeClaudeSettings(artifacts.claudeSettingsPath, hooks);
   await mergeClaudeSettings(artifacts.codebuddySettingsPath, hooks);
-  await ensureGeneratedCodexHooksIgnored(input.gitDir);
+  await ensureGeneratedAgentSettingsIgnored(input.gitDir);
   await mergeCodexHooksFile(artifacts.codexHooksPath, buildCodexHookSettings(artifacts).hooks, artifacts.agentCtlPath);
 
   return artifacts;

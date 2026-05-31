@@ -15,6 +15,7 @@ function createWorktree(branch: string, overrides: Partial<WorktreeInfo> = {}): 
     unpushed: false,
     status: "idle",
     elapsed: "",
+    approvalPrompt: null,
     profile: null,
     agentName: null,
     agentLabel: null,

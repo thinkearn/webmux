@@ -1,4 +1,4 @@
-import type { AgentStatusChangedEvent, RuntimeEvent, RuntimeErrorEvent } from "../domain/events";
+import type { AgentApprovalRequestedEvent, AgentStatusChangedEvent, RuntimeEvent, RuntimeErrorEvent } from "../domain/events";
 import type {
   AgentId,
   RuntimeKind,
@@ -59,6 +59,7 @@ function makeDefaultState(input: {
       lastStartedAt: null,
       lastEventAt: null,
       lastError: null,
+      approvalPrompt: null,
     },
     services: [],
     prs: [],
@@ -194,9 +195,13 @@ export class ProjectRuntime {
       case "agent_stopped":
         state.agent.lifecycle = "stopped";
         state.agent.lastEventAt = timestamp;
+        state.agent.approvalPrompt = null;
         break;
       case "agent_status_changed":
         this.applyStatusChanged(state, event, timestamp);
+        break;
+      case "agent_approval_requested":
+        this.applyApprovalRequested(state, event, timestamp);
         break;
       case "runtime_error":
         this.applyRuntimeError(state, event, timestamp);
@@ -219,7 +224,27 @@ export class ProjectRuntime {
     if (state.agent.lastStartedAt === null && event.lifecycle === "running") {
       state.agent.lastStartedAt = timestamp;
     }
+    if (event.lifecycle !== "idle") {
+      state.agent.approvalPrompt = null;
+    }
     state.agent.lastError = null;
+  }
+
+  private applyApprovalRequested(
+    state: ManagedWorktreeRuntimeState,
+    event: AgentApprovalRequestedEvent,
+    timestamp: string,
+  ): void {
+    state.agent.lifecycle = "idle";
+    state.agent.lastEventAt = timestamp;
+    state.agent.lastError = null;
+    state.agent.approvalPrompt = {
+      id: `${timestamp}:${event.kind}`,
+      kind: event.kind,
+      title: "Approval required",
+      message: event.message?.trim() || "Claude is waiting for approval in the terminal.",
+      createdAt: timestamp,
+    };
   }
 
   private applyRuntimeError(
@@ -230,6 +255,7 @@ export class ProjectRuntime {
     state.agent.lifecycle = "error";
     state.agent.lastError = event.message;
     state.agent.lastEventAt = timestamp;
+    state.agent.approvalPrompt = null;
   }
 
   private applyBranchChange(state: ManagedWorktreeRuntimeState, branch: string): void {

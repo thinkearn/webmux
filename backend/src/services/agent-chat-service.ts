@@ -56,7 +56,7 @@ export function resolveAgentChatSupport(input: {
     };
   }
 
-  if (input.agent.kind === "builtin") {
+  if (input.agent.kind === "builtin" && input.agent.implementation.agent !== "codebuddy") {
     return {
       ok: true,
       data: {

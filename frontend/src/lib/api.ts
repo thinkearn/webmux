@@ -51,6 +51,7 @@ function mapWorktree(snapshot: ProjectWorktreeSnapshot): WorktreeInfo {
     unpushed: snapshot.unpushed,
     status: snapshot.status,
     elapsed: snapshot.elapsed,
+    approvalPrompt: snapshot.approvalPrompt,
     profile: snapshot.profile,
     agentName: snapshot.agentName,
     agentLabel: snapshot.agentLabel,

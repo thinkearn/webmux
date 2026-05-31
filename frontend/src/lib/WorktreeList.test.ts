@@ -16,6 +16,7 @@ function createWorktree(branch: string): WorktreeInfo {
     unpushed: false,
     status: "running",
     elapsed: "1m",
+    approvalPrompt: null,
     profile: null,
     agentName: null,
     agentLabel: null,

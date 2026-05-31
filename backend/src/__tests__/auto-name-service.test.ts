@@ -4,15 +4,22 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { AutoNameService } from "../services/auto-name-service";
 
-async function getClaudeCliFlags(): Promise<Set<string>> {
-  const proc = Bun.spawn(["claude", "--help"], { stdout: "pipe", stderr: "pipe" });
-  const output = await new Response(proc.stdout).text();
-  await proc.exited;
-  const flags = new Set<string>();
-  for (const match of output.matchAll(/--[\w-]+/g)) {
-    flags.add(match[0]);
+async function getClaudeCliFlags(): Promise<{ command: string; flags: Set<string> }> {
+  for (const command of ["claude", "claude-internal"]) {
+    try {
+      const proc = Bun.spawn([command, "--help"], { stdout: "pipe", stderr: "pipe" });
+      const output = `${await new Response(proc.stdout).text()}\n${await new Response(proc.stderr).text()}`;
+      await proc.exited;
+      const flags = new Set<string>();
+      for (const match of output.matchAll(/--[\w-]+/g)) {
+        flags.add(match[0]);
+      }
+      return { command, flags };
+    } catch {
+      continue;
+    }
   }
-  return flags;
+  throw new Error("No Claude-compatible CLI found");
 }
 
 function fakeSpawn(stdout: string, exitCode = 0, stderr = "") {
@@ -165,7 +172,24 @@ describe("AutoNameService", () => {
 
     await expect(
       service.generateBranchName({ provider: "claude" }, "Fix bug"),
-    ).rejects.toThrow("'claude' CLI not found");
+    ).rejects.toThrow("No Claude-compatible CLI found");
+  });
+
+  it("falls back to claude-internal when claude is not installed", async () => {
+    const calls: string[][] = [];
+    const service = new AutoNameService({
+      spawnImpl: async (args) => {
+        calls.push(args);
+        if (args[0] === "claude") throw new Error("ENOENT");
+        return { exitCode: 0, stdout: "fix-login-flow", stderr: "" };
+      },
+    });
+
+    const branch = await service.generateBranchName({ provider: "claude" }, "Fix login flow");
+
+    expect(branch).toBe("fix-login-flow");
+    expect(calls.map((call) => call[0])).toEqual(["claude", "claude-internal"]);
+    expect(calls[1]).not.toContain("--model");
   });
 
   it("throws on non-zero exit code", async () => {
@@ -250,15 +274,15 @@ describe("AutoNameService", () => {
   });
 
   it("only uses flags supported by the claude CLI", async () => {
+    const cli = await getClaudeCliFlags();
     const { calls, spawnImpl } = fakeSpawn("test-branch");
-    const service = new AutoNameService({ spawnImpl });
+    const service = new AutoNameService({ spawnImpl, claudeCommand: cli.command });
 
     await service.generateBranchName({ provider: "claude" }, "Test task");
 
-    const cliFlags = await getClaudeCliFlags();
     const usedFlags = calls[0].filter((arg) => arg.startsWith("--"));
     for (const flag of usedFlags) {
-      expect(cliFlags.has(flag)).toBe(true);
+      expect(cli.flags.has(flag)).toBe(true);
     }
   });
 

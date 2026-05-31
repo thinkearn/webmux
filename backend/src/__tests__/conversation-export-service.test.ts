@@ -21,6 +21,7 @@ function makeConversation(): AgentsUiConversationState {
     cwd: "/tmp/wt/feat-foo",
     running: false,
     activeTurnId: null,
+    approvalPrompt: null,
     messages: [
       { id: "m1", turnId: "t1", order: 0, role: "user", kind: "text", text: "Do the thing", status: "completed", createdAt: "2026-05-11T10:00:00.000Z" },
       { id: "m2", turnId: "t1", order: 1, role: "assistant", kind: "text", text: "Did the thing", status: "completed", createdAt: "2026-05-11T10:00:30.000Z" },
@@ -80,6 +81,7 @@ describe("renderConversationAsMarkdown", () => {
       cwd: "/tmp",
       running: false,
       activeTurnId: null,
+      approvalPrompt: null,
       messages: [
         { id: "m1", turnId: "t1", order: 0, role: "assistant", kind: "text", text: "Use ```bash here", status: "completed", createdAt: null },
       ],

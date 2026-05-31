@@ -16,6 +16,7 @@ function createWorktree(overrides: Partial<WorktreeInfo> = {}): WorktreeInfo {
     unpushed: false,
     status: "idle",
     elapsed: "1m",
+    approvalPrompt: null,
     profile: null,
     agentName: "claude",
     agentLabel: "Claude",
@@ -39,6 +40,7 @@ function createConversation(overrides: Partial<AgentsUiConversationState> = {}):
     cwd: "/repo/__worktrees/feature/mobile-chat",
     running: false,
     activeTurnId: null,
+    approvalPrompt: null,
     messages: [],
     ...overrides,
   };
@@ -127,6 +129,7 @@ describe("WorktreeConversationPanel", () => {
     expect(screen.queryByRole("button", { name: "Interrupt" })).not.toBeInTheDocument();
   });
 
+<<<<<<< HEAD
   it("does not duplicate the stale terminal banner inside chat", () => {
     renderPanel({
       worktree: createWorktree({ agentTerminalStale: true }),
@@ -296,5 +299,23 @@ describe("WorktreeConversationPanel", () => {
     });
 
     expect(screen.getByText("Codex is processing")).toBeInTheDocument();
+  });
+
+  it("shows an approval prompt banner when Claude is waiting for approval", () => {
+    renderPanel({
+      conversation: createConversation({
+        approvalPrompt: {
+          id: "approval-1",
+          kind: "permission_prompt",
+          title: "Approval required",
+          message: "Claude wants to run Bash: bun test",
+          createdAt: "2026-04-14T10:03:00.000Z",
+        },
+      }),
+    });
+
+    expect(screen.getByText("Approval required")).toBeInTheDocument();
+    expect(screen.getByText("Claude wants to run Bash: bun test")).toBeInTheDocument();
+    expect(screen.getByText("Approve or deny it in the terminal.")).toBeInTheDocument();
   });
 });

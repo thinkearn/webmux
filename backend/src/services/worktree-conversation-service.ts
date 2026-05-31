@@ -556,6 +556,7 @@ export function buildConversationState(
     cwd: thread.cwd,
     running: thread.status.type === "active" || activeTurn !== null,
     activeTurnId: activeTurn?.id ?? null,
+    approvalPrompt: null,
     messages,
   };
 }

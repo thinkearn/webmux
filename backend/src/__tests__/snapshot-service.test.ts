@@ -117,6 +117,7 @@ describe("buildProjectSnapshot", () => {
         paneCount: 2,
         status: "creating",
         elapsed: "5m",
+        approvalPrompt: null,
         services: [
           { name: "frontend", port: 3010, running: true, url: "http://127.0.0.1:3010" },
         ],
@@ -241,6 +242,7 @@ describe("buildProjectSnapshot", () => {
         paneCount: 0,
         status: "creating",
         elapsed: "",
+        approvalPrompt: null,
         services: [],
         prs: [],
         linearIssue: {

@@ -688,7 +688,7 @@ describe("LifecycleService", () => {
     expect(settingsText).toContain(additionalDirectory);
     expect(settingsText).toContain("webmux-agentctl");
     expect(settingsText).toContain("claude-user-prompt-submit");
-    expect(settingsText).toContain("status-changed --lifecycle idle");
+    expect(settingsText).toContain("claude-approval-requested");
   });
 
   it("creates a managed worktree under an absolute worktree root", async () => {

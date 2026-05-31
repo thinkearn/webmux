@@ -20,6 +20,7 @@ describe("buildAgentsUiWorktreeSummary", () => {
       paneCount: 2,
       status: "running",
       elapsed: "4m",
+      approvalPrompt: null,
       services: [
         { name: "frontend", port: 3010, running: true, url: "http://127.0.0.1:3010" },
       ],
@@ -60,6 +61,7 @@ describe("buildAgentsUiWorktreeSummary", () => {
       agentTerminalStale: true,
       mux: true,
       status: "running",
+      approvalPrompt: null,
       dirty: true,
       unpushed: false,
       services: [
@@ -106,6 +108,7 @@ describe("buildAgentsUiWorktreeSummary", () => {
       paneCount: 0,
       status: "closed",
       elapsed: "",
+      approvalPrompt: null,
       services: [],
       prs: [],
       linearIssue: null,
