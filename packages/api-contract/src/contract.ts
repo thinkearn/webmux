@@ -97,6 +97,7 @@ const commonErrorResponses = {
   400: ErrorResponseSchema,
   404: ErrorResponseSchema,
   409: ErrorResponseSchema,
+  422: ErrorResponseSchema,
   500: ErrorResponseSchema,
   502: ErrorResponseSchema,
   503: ErrorResponseSchema,
