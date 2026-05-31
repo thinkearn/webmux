@@ -3,7 +3,7 @@ import { basename, join } from "node:path";
 import { CUSTOM_AGENT_DEFAULTS } from "@webmux/api-contract";
 import { log } from "../lib/log";
 
-export type ClaudeCliConversationMessageKind = "text" | "toolUse" | "toolResult";
+export type ClaudeCliConversationMessageKind = "text" | "thinking" | "toolUse" | "toolResult";
 
 export interface ClaudeCliConversationMessage {
   id: string;
@@ -13,6 +13,9 @@ export interface ClaudeCliConversationMessage {
   createdAt: string | null;
   kind?: ClaudeCliConversationMessageKind;
   toolName?: string;
+  toolCallId?: string;
+  command?: string;
+  cwd?: string;
 }
 
 export interface ClaudeCliSession {
@@ -340,12 +343,14 @@ export function buildClaudeSessionFromText(
         if (!isRecord(entry) || entry.type !== "tool_result") continue;
         const text = extractToolResultText(entry.content);
         if (text.length === 0) continue;
+        const toolCallId = typeof entry.tool_use_id === "string" ? entry.tool_use_id : undefined;
         pushMessage({
           id: `${record.uuid}:${blockIndex}`,
           turnId: currentTurnId,
           role: "user",
           kind: "toolResult",
           text,
+          toolCallId,
           createdAt: timestamp,
         });
       }
@@ -357,6 +362,19 @@ export function buildClaudeSessionFromText(
 
     for (const block of record.message.content) {
       if (!isRecord(block)) continue;
+      if (block.type === "thinking" && typeof block.thinking === "string") {
+        const text = block.thinking.trim();
+        if (text.length === 0) continue;
+        pushMessage({
+          id: `${record.uuid}:${blockIndex}`,
+          turnId: currentTurnId,
+          role: "assistant",
+          kind: "thinking",
+          text,
+          createdAt: timestamp,
+        });
+        continue;
+      }
       if (block.type === "text" && typeof block.text === "string") {
         const text = block.text.trim();
         if (text.length === 0) continue;
@@ -372,7 +390,11 @@ export function buildClaudeSessionFromText(
       }
       if (block.type === "tool_use") {
         const toolName = typeof block.name === "string" ? block.name : "tool";
-        const text = truncate(compactJson(block.input ?? {}));
+        const toolCallId = typeof block.id === "string" ? block.id : undefined;
+        const input = isRecord(block.input) ? block.input : {};
+        const text = truncate(compactJson(input));
+        const command = typeof input.command === "string" ? input.command : undefined;
+        const cwd = typeof input.cwd === "string" ? input.cwd : undefined;
         pushMessage({
           id: `${record.uuid}:${blockIndex}`,
           turnId: currentTurnId,
@@ -380,6 +402,9 @@ export function buildClaudeSessionFromText(
           kind: "toolUse",
           toolName,
           text,
+          toolCallId,
+          command,
+          cwd,
           createdAt: timestamp,
         });
         continue;

@@ -183,6 +183,9 @@
     try {
       const response = await requestConversation(mode);
       applyConversationResponse(response);
+      if (conversation?.running === true && !supportsStreaming(conversation)) {
+        startRefreshPolling(conversation);
+      }
     } catch (error) {
       conversationError = error instanceof Error ? error.message : String(error);
     } finally {

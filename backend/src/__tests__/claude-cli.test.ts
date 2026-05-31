@@ -204,6 +204,7 @@ describe("claude-cli adapter", () => {
         role: "assistant",
         kind: "toolUse",
         toolName: "Read",
+        toolCallId: "tool-1",
         text: `{"file_path":"/tmp/foo.txt"}`,
         createdAt: "2026-04-14T15:00:01.000Z",
       },
@@ -212,6 +213,7 @@ describe("claude-cli adapter", () => {
         turnId: "user-1",
         role: "user",
         kind: "toolResult",
+        toolCallId: "tool-1",
         text: "hello world",
         createdAt: "2026-04-14T15:00:02.000Z",
       },
@@ -222,6 +224,133 @@ describe("claude-cli adapter", () => {
         kind: "text",
         text: "It says hello world.",
         createdAt: "2026-04-14T15:00:03.000Z",
+      },
+    ]);
+  });
+
+  it("surfaces thinking blocks from assistant records", () => {
+    const session = buildClaudeSessionFromText({
+      path: "/tmp/session.jsonl",
+      sessionId: "session-thinking",
+      text: [
+        JSON.stringify({
+          type: "user",
+          uuid: "user-1",
+          timestamp: "2026-04-14T16:00:00.000Z",
+          cwd: "/tmp",
+          message: { role: "user", content: "Explain this code" },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          uuid: "assistant-1",
+          timestamp: "2026-04-14T16:00:01.000Z",
+          message: {
+            role: "assistant",
+            stop_reason: null,
+            content: [
+              { type: "thinking", thinking: "Let me analyze the function step by step." },
+              { type: "text", text: "This function does X." },
+            ],
+          },
+        }),
+      ].join("\n"),
+    });
+
+    expect(session.messages).toEqual([
+      {
+        id: "user-1",
+        turnId: "user-1",
+        role: "user",
+        kind: "text",
+        text: "Explain this code",
+        createdAt: "2026-04-14T16:00:00.000Z",
+      },
+      {
+        id: "assistant-1:1",
+        turnId: "user-1",
+        role: "assistant",
+        kind: "thinking",
+        text: "Let me analyze the function step by step.",
+        createdAt: "2026-04-14T16:00:01.000Z",
+      },
+      {
+        id: "assistant-1:2",
+        turnId: "user-1",
+        role: "assistant",
+        kind: "text",
+        text: "This function does X.",
+        createdAt: "2026-04-14T16:00:01.000Z",
+      },
+    ]);
+  });
+
+  it("extracts command and cwd from Bash tool_use input", () => {
+    const session = buildClaudeSessionFromText({
+      path: "/tmp/session.jsonl",
+      sessionId: "session-bash",
+      text: [
+        JSON.stringify({
+          type: "user",
+          uuid: "user-1",
+          timestamp: "2026-04-14T17:00:00.000Z",
+          cwd: "/repo",
+          message: { role: "user", content: "Run the tests" },
+        }),
+        JSON.stringify({
+          type: "assistant",
+          uuid: "assistant-1",
+          timestamp: "2026-04-14T17:00:01.000Z",
+          message: {
+            role: "assistant",
+            stop_reason: "tool_use",
+            content: [
+              { type: "tool_use", id: "tool-bash-1", name: "Bash", input: { command: "bun test", cwd: "/repo/src" } },
+            ],
+          },
+        }),
+        JSON.stringify({
+          type: "user",
+          uuid: "tool-result-1",
+          timestamp: "2026-04-14T17:00:02.000Z",
+          message: {
+            role: "user",
+            content: [
+              { type: "tool_result", tool_use_id: "tool-bash-1", content: "all tests passed" },
+            ],
+          },
+        }),
+      ].join("\n"),
+    });
+
+    expect(session.messages).toEqual([
+      {
+        id: "user-1",
+        turnId: "user-1",
+        role: "user",
+        kind: "text",
+        text: "Run the tests",
+        createdAt: "2026-04-14T17:00:00.000Z",
+      },
+      {
+        id: "assistant-1:1",
+        turnId: "user-1",
+        role: "assistant",
+        kind: "toolUse",
+        toolName: "Bash",
+        toolCallId: "tool-bash-1",
+        command: "bun test",
+        cwd: "/repo/src",
+        text: '{"command":"bun test","cwd":"/repo/src"}',
+        createdAt: "2026-04-14T17:00:01.000Z",
+      },
+      {
+        id: "tool-result-1:2",
+        turnId: "user-1",
+        role: "user",
+        kind: "toolResult",
+        toolCallId: "tool-bash-1",
+        text: "all tests passed",
+        createdAt: "2026-04-14T17:00:02.000Z",
       },
     ]);
   });
