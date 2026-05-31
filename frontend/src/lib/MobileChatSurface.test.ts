@@ -14,6 +14,7 @@ vi.mock("./api", () => ({
   fetchWorktreeConversationHistory: vi.fn(),
   interruptWorktreeConversation: vi.fn(),
   sendWorktreeConversationMessage: vi.fn(),
+  parseMainChatAgentId: vi.fn(() => null),
 }));
 
 import MobileChatSurface from "./MobileChatSurface.svelte";
@@ -475,5 +476,121 @@ describe("MobileChatSurface", () => {
       expect(fetchWorktreeConversationHistory).toHaveBeenCalledTimes(122);
     });
     await screen.findByText("Done.");
+  });
+
+  it("starts polling immediately when a running Claude conversation is attached", async () => {
+    vi.mocked(attachWorktreeConversation).mockResolvedValue(createConversationResponse("claudeCode", {
+      running: true,
+      activeTurnId: "turn-existing",
+      messages: [
+        {
+          id: "user-existing",
+          turnId: "turn-existing",
+          order: 0,
+          role: "user",
+          kind: "text",
+          text: "Fix the bug",
+          status: "completed",
+          createdAt: "2026-04-15T12:00:00.000Z",
+        },
+      ],
+    }));
+
+    let historyRequestCount = 0;
+    vi.mocked(fetchWorktreeConversationHistory).mockImplementation(async () => {
+      historyRequestCount += 1;
+      return historyRequestCount < 4
+        ? createConversationResponse("claudeCode", {
+            running: true,
+            activeTurnId: "turn-existing",
+            messages: [
+              {
+                id: "user-existing",
+                turnId: "turn-existing",
+                order: 0,
+                role: "user",
+                kind: "text",
+                text: "Fix the bug",
+                status: "completed",
+                createdAt: "2026-04-15T12:00:00.000Z",
+              },
+              {
+                id: "assistant-existing",
+                turnId: "turn-existing",
+                order: 1,
+                role: "assistant",
+                kind: "text",
+                text: `Working... ${historyRequestCount}`,
+                status: "inProgress",
+                createdAt: "2026-04-15T12:00:01.000Z",
+              },
+            ],
+          })
+        : createConversationResponse("claudeCode", {
+            running: false,
+            activeTurnId: null,
+            messages: [
+              {
+                id: "user-existing",
+                turnId: "turn-existing",
+                order: 0,
+                role: "user",
+                kind: "text",
+                text: "Fix the bug",
+                status: "completed",
+                createdAt: "2026-04-15T12:00:00.000Z",
+              },
+              {
+                id: "assistant-existing",
+                turnId: "turn-existing",
+                order: 1,
+                role: "assistant",
+                kind: "text",
+                text: "Done fixing.",
+                status: "completed",
+                createdAt: "2026-04-15T12:00:05.000Z",
+              },
+            ],
+          });
+    });
+
+    render(MobileChatSurface, {
+      props: {
+        worktree: createWorktree(),
+      },
+    });
+
+    await screen.findByText("Fix the bug");
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await waitFor(() => {
+      expect(fetchWorktreeConversationHistory).toHaveBeenCalledTimes(1);
+    });
+
+    await vi.advanceTimersByTimeAsync(1000);
+    await waitFor(() => {
+      expect(fetchWorktreeConversationHistory).toHaveBeenCalledTimes(2);
+    });
+
+    await vi.advanceTimersByTimeAsync(2000);
+    await waitFor(() => {
+      expect(fetchWorktreeConversationHistory).toHaveBeenCalledTimes(4);
+    });
+    await screen.findByText("Done fixing.");
+  });
+
+  it("does not start polling when an idle Claude conversation is attached", async () => {
+    vi.mocked(attachWorktreeConversation).mockResolvedValue(createConversationResponse("claudeCode"));
+
+    render(MobileChatSurface, {
+      props: {
+        worktree: createWorktree(),
+      },
+    });
+
+    await screen.findByText("No messages yet. Send the first prompt to start this chat.");
+
+    await vi.advanceTimersByTimeAsync(5000);
+    expect(fetchWorktreeConversationHistory).not.toHaveBeenCalled();
   });
 });
