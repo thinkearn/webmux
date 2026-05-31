@@ -81,6 +81,57 @@ describe("claude-cli adapter", () => {
     });
   });
 
+  it("builds a transcript from CodeBuddy session jsonl text", () => {
+    const session = buildClaudeSessionFromText({
+      path: "/tmp/codebuddy.jsonl",
+      sessionId: "codebuddy-session",
+      text: [
+        JSON.stringify({
+          id: "user-1",
+          timestamp: 1780209814332,
+          type: "message",
+          role: "user",
+          content: [{ type: "input_text", text: "你好" }],
+          sessionId: "codebuddy-session",
+          cwd: "/tmp/worktrees/codebuddy-feature",
+        }),
+        JSON.stringify({
+          id: "assistant-1",
+          parentId: "user-1",
+          timestamp: 1780209820378,
+          type: "message",
+          role: "assistant",
+          status: "completed",
+          content: [{ type: "output_text", text: "你好，有什么我可以帮你处理的？" }],
+          sessionId: "codebuddy-session",
+          cwd: "/tmp/worktrees/codebuddy-feature",
+        }),
+      ].join("\n"),
+    });
+
+    expect(session.cwd).toBe("/tmp/worktrees/codebuddy-feature");
+    expect(session.createdAt).toBe("2026-05-31T06:43:34.332Z");
+    expect(session.lastSeenAt).toBe("2026-05-31T06:43:40.378Z");
+    expect(session.messages).toEqual([
+      {
+        id: "user-1",
+        turnId: "user-1",
+        role: "user",
+        kind: "text",
+        text: "你好",
+        createdAt: "2026-05-31T06:43:34.332Z",
+      },
+      {
+        id: "assistant-1:1",
+        turnId: "user-1",
+        role: "assistant",
+        kind: "text",
+        text: "你好，有什么我可以帮你处理的？",
+        createdAt: "2026-05-31T06:43:40.378Z",
+      },
+    ]);
+  });
+
   it("surfaces tool_use and tool_result blocks as intermediate messages", () => {
     const session = buildClaudeSessionFromText({
       path: "/tmp/session.jsonl",

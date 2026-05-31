@@ -65,9 +65,13 @@ export interface ClaudeCliGateway {
 }
 
 interface ClaudeStoredRecord {
+  content?: unknown;
   cwd?: unknown;
   gitBranch?: unknown;
+  id?: unknown;
   message?: unknown;
+  parentId?: unknown;
+  role?: unknown;
   sessionId?: unknown;
   timestamp?: unknown;
   type?: unknown;
@@ -88,6 +92,12 @@ function readString(raw: unknown): string | null {
   return typeof raw === "string" && raw.length > 0 ? raw : null;
 }
 
+function readTimestamp(raw: unknown): string | null {
+  if (typeof raw === "string" && raw.length > 0) return raw;
+  if (typeof raw === "number" && Number.isFinite(raw)) return new Date(raw).toISOString();
+  return null;
+}
+
 function extractClaudeMessageText(raw: unknown): string {
   if (typeof raw === "string") {
     return raw.trim();
@@ -100,7 +110,7 @@ function extractClaudeMessageText(raw: unknown): string {
   return raw
     .map((entry) => {
       if (!isRecord(entry)) return "";
-      if (entry.type !== "text") return "";
+      if (entry.type !== "text" && entry.type !== "input_text" && entry.type !== "output_text") return "";
       return typeof entry.text === "string" ? entry.text : "";
     })
     .join("")
@@ -166,6 +176,16 @@ function isClaudeAssistantRecord(raw: ClaudeStoredRecord): raw is ClaudeStoredRe
 } {
   if (raw.type !== "assistant" || !isRecord(raw.message)) return false;
   return raw.message.role === "assistant" && typeof raw.uuid === "string";
+}
+
+function isCodeBuddyMessageRecord(raw: ClaudeStoredRecord): raw is ClaudeStoredRecord & {
+  id: string;
+  role: "user" | "assistant";
+  type: "message";
+} {
+  return raw.type === "message"
+    && (raw.role === "user" || raw.role === "assistant")
+    && typeof raw.id === "string";
 }
 
 export function encodeClaudeProjectDir(cwd: string): string {
@@ -265,10 +285,39 @@ export function buildClaudeSessionFromText(
   for (const record of records) {
     cwd ??= readString(record.cwd);
     gitBranch ??= readString(record.gitBranch);
+    const timestamp = readTimestamp(record.timestamp);
     if (!createdAt) {
-      createdAt = readString(record.timestamp);
+      createdAt = timestamp;
     }
-    lastSeenAt = readString(record.timestamp) ?? lastSeenAt;
+    lastSeenAt = timestamp ?? lastSeenAt;
+
+    if (isCodeBuddyMessageRecord(record)) {
+      const text = extractClaudeMessageText(record.content);
+      if (text.length === 0) continue;
+      if (record.role === "user") {
+        currentTurnId = record.id;
+        blockIndex = 0;
+        pushMessage({
+          id: record.id,
+          turnId: record.id,
+          role: "user",
+          kind: "text",
+          text,
+          createdAt: timestamp,
+        });
+        continue;
+      }
+      if (!currentTurnId) currentTurnId = typeof record.parentId === "string" ? record.parentId : record.id;
+      pushMessage({
+        id: `${record.id}:${blockIndex}`,
+        turnId: currentTurnId,
+        role: "assistant",
+        kind: "text",
+        text,
+        createdAt: timestamp,
+      });
+      continue;
+    }
 
     if (isTopLevelClaudeUserPrompt(record)) {
       currentTurnId = record.uuid;
@@ -279,7 +328,7 @@ export function buildClaudeSessionFromText(
         role: "user",
         kind: "text",
         text: record.message.content.trim(),
-        createdAt: readString(record.timestamp),
+        createdAt: timestamp,
       });
       continue;
     }
@@ -297,7 +346,7 @@ export function buildClaudeSessionFromText(
           role: "user",
           kind: "toolResult",
           text,
-          createdAt: readString(record.timestamp),
+          createdAt: timestamp,
         });
       }
       continue;
@@ -317,7 +366,7 @@ export function buildClaudeSessionFromText(
           role: "assistant",
           kind: "text",
           text,
-          createdAt: readString(record.timestamp),
+          createdAt: timestamp,
         });
         continue;
       }
@@ -331,7 +380,7 @@ export function buildClaudeSessionFromText(
           kind: "toolUse",
           toolName,
           text,
-          createdAt: readString(record.timestamp),
+          createdAt: timestamp,
         });
         continue;
       }
