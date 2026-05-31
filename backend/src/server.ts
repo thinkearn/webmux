@@ -1863,81 +1863,64 @@ function sanitizeFilename(name: string): string {
   return base.replace(/[^a-zA-Z0-9._-]/g, "_") || "upload";
 }
 
+async function writeUploadedFiles(
+  req: Request,
+  uploadDir: string,
+): Promise<Response | { files: Array<{ path: string }> }> {
+  let formData: FormData;
+  try {
+    formData = await req.formData();
+  } catch {
+    return errorResponse("Invalid multipart form data", 400);
+  }
+
+  const entries = formData.getAll("files");
+  if (entries.length === 0) return errorResponse("No files provided", 400);
+
+  mkdirSync(uploadDir, { recursive: true });
+
+  const results: Array<{ path: string }> = [];
+  for (const entry of entries) {
+    if (!(entry instanceof File)) continue;
+    if (!ALLOWED_IMAGE_TYPES.has(entry.type)) {
+      return errorResponse(`Unsupported file type: ${entry.type}`, 400);
+    }
+    if (entry.size > MAX_FILE_SIZE) {
+      return errorResponse(`File too large: ${entry.name} (max 10MB)`, 400);
+    }
+    const safeName = `${Date.now()}_${sanitizeFilename(entry.name)}`;
+    const destPath = join(uploadDir, safeName);
+    if (!resolve(destPath).startsWith(uploadDir + "/")) {
+      return errorResponse("Invalid filename", 400);
+    }
+    await Bun.write(destPath, entry);
+    results.push({ path: destPath });
+  }
+
+  return { files: results };
+}
+
 async function apiUploadFiles(name: string, req: Request): Promise<Response> {
   const state = projectRuntime.getWorktreeByBranch(name);
   if (!state) return errorResponse(`Worktree not found: ${name}`, 404);
   await disarmOneshotIfArmed(name, "upload-files");
 
-  let formData: FormData;
-  try {
-    formData = await req.formData();
-  } catch {
-    return errorResponse("Invalid multipart form data", 400);
-  }
-
-  const entries = formData.getAll("files");
-  if (entries.length === 0) return errorResponse("No files provided", 400);
-
   const uploadDir = `/tmp/webmux-uploads/${sanitizeFilename(name)}`;
-  mkdirSync(uploadDir, { recursive: true });
+  const result = await writeUploadedFiles(req, uploadDir);
+  if ("ok" in result) return result as Response;
 
-  const results: Array<{ path: string }> = [];
-  for (const entry of entries) {
-    if (!(entry instanceof File)) continue;
-    if (!ALLOWED_IMAGE_TYPES.has(entry.type)) {
-      return errorResponse(`Unsupported file type: ${entry.type}`, 400);
-    }
-    if (entry.size > MAX_FILE_SIZE) {
-      return errorResponse(`File too large: ${entry.name} (max 10MB)`, 400);
-    }
-    const safeName = `${Date.now()}_${sanitizeFilename(entry.name)}`;
-    const destPath = join(uploadDir, safeName);
-    if (!resolve(destPath).startsWith(uploadDir + "/")) {
-      return errorResponse("Invalid filename", 400);
-    }
-    await Bun.write(destPath, entry);
-    results.push({ path: destPath });
-  }
-
-  log.info(`[upload] branch=${name} files=${results.length}`);
-  return jsonResponse({ files: results });
+  log.info(`[upload] branch=${name} files=${result.files.length}`);
+  return jsonResponse(result);
 }
 
 async function apiUploadStagingFiles(req: Request): Promise<Response> {
-  let formData: FormData;
-  try {
-    formData = await req.formData();
-  } catch {
-    return errorResponse("Invalid multipart form data", 400);
-  }
-
-  const entries = formData.getAll("files");
-  if (entries.length === 0) return errorResponse("No files provided", 400);
-
   const stagingId = randomUUID();
   const uploadDir = `/tmp/webmux-uploads/_staging/${stagingId}`;
-  mkdirSync(uploadDir, { recursive: true });
+  const result = await writeUploadedFiles(req, uploadDir);
+  if ("ok" in result) return result as Response;
 
-  const results: Array<{ path: string }> = [];
-  for (const entry of entries) {
-    if (!(entry instanceof File)) continue;
-    if (!ALLOWED_IMAGE_TYPES.has(entry.type)) {
-      return errorResponse(`Unsupported file type: ${entry.type}`, 400);
-    }
-    if (entry.size > MAX_FILE_SIZE) {
-      return errorResponse(`File too large: ${entry.name} (max 10MB)`, 400);
-    }
-    const safeName = `${Date.now()}_${sanitizeFilename(entry.name)}`;
-    const destPath = join(uploadDir, safeName);
-    if (!resolve(destPath).startsWith(uploadDir + "/")) {
-      return errorResponse("Invalid filename", 400);
-    }
-    await Bun.write(destPath, entry);
-    results.push({ path: destPath });
-  }
-
-  log.info(`[upload-staging] stagingId=${stagingId} files=${results.length}`);
-  return jsonResponse({ files: results });
+  log.info(`[upload-staging] stagingId=${stagingId} files=${result.files.length}`);
+  return jsonResponse(result);
 }
 
 function parseWorktreeNameParam(params: Record<string, string>):
