@@ -1519,7 +1519,7 @@
 
 {#if mergeBranch}
   <ConfirmDialog
-    message={`Merge worktree "${mergeBranch}" into main? The worktree will be removed after merging.`}
+    message={`Merge worktree "${mergeBranch}" into "${config.mainBranch || "main"}"? The worktree will be removed after merging.`}
     confirmLabel="Merge"
     variant="accent"
     onconfirm={handleMerge}
