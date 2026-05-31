@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
 import {
+  buildWebmuxInstanceUrl,
   LAST_SELECTED_WORKTREE_STORAGE_KEY,
   WEB_CHAT_UI_STORAGE_KEY,
   loadSavedSelectedWorktree,
   loadUseWebChatUi,
+  projectDirBasename,
   resolveSelectedBranch,
   saveSelectedWorktree,
   saveUseWebChatUi,
@@ -67,5 +69,17 @@ describe("worktree selection persistence", () => {
 
     expect(loadUseWebChatUi()).toBe(false);
     expect(localStorage.getItem(WEB_CHAT_UI_STORAGE_KEY)).toBeNull();
+  });
+});
+
+describe("webmux instance navigation", () => {
+  it("builds a port-based URL for another running instance", () => {
+    expect(
+      buildWebmuxInstanceUrl({ port: 5112 }, { protocol: "http:", hostname: "localhost" }),
+    ).toBe("http://localhost:5112/");
+  });
+
+  it("derives a readable project label from the project directory", () => {
+    expect(projectDirBasename("/data/home/dev/workmux-web")).toBe("workmux-web");
   });
 });

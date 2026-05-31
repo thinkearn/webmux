@@ -79,6 +79,7 @@
   {/if}
   {#each rows as row (row.worktree.branch)}
     {@const wt = row.worktree}
+    {@const isMainChat = wt.kind === "mainChat"}
     {@const isActive = wt.branch === selected}
     {@const isRemoving = removing.has(wt.branch)}
     {@const isClosed = wt.mux !== "✓"}
@@ -88,7 +89,7 @@
     {@const isArchived = wt.archived}
     {@const isBusy = isRemoving || isInitializing}
     {@const hasLabel = !!wt.label}
-    {@const hasBadgeRow = isArchived || isCreating || isInitializing || isClosed || wt.prs.length > 0 || !!wt.linearIssue || wt.source === "oneshot"}
+    {@const hasBadgeRow = isMainChat || isArchived || isCreating || isInitializing || isClosed || wt.prs.length > 0 || !!wt.linearIssue || wt.source === "oneshot"}
     <li class="mb-0.5 group relative {isBusy ? 'opacity-40 pointer-events-none' : ''}">
       <button
         type="button"
@@ -112,6 +113,8 @@
                 <span class="font-medium truncate">{wt.label ?? wt.branch}</span>
                 {#if hasLabel}
                   <span class="text-[10px] leading-tight text-muted truncate">{wt.branch}</span>
+                {:else if isMainChat}
+                  <span class="text-[10px] leading-tight text-muted truncate">Project root</span>
                 {/if}
               </span>
               {#if !isCreating && !isInitializing && !isClosed}
@@ -123,6 +126,11 @@
             </span>
             {#if hasBadgeRow}
               <span class="flex min-w-0 flex-wrap items-center gap-1.5" data-worktree-badge-row>
+                {#if isMainChat}
+                  <span class="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-accent/30 text-accent">
+                    chat
+                  </span>
+                {/if}
                 {#if wt.source === "oneshot"}
                   <span
                     class="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-edge text-muted"
@@ -178,8 +186,8 @@
         type="button"
         disabled={isBusy}
         class="absolute top-2 right-2 w-6 h-6 rounded flex items-center justify-center text-muted hover:text-primary hover:bg-hover opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
-        title="Worktree actions"
-        aria-label={`Actions for ${wt.branch}`}
+        title={isMainChat ? "Chat actions" : "Worktree actions"}
+        aria-label={`Actions for ${wt.label ?? wt.branch}`}
         aria-haspopup="menu"
         aria-expanded={openMenuBranch === wt.branch}
         onclick={(event) => {
@@ -219,6 +227,7 @@
           >
             Close
           </button>
+          {#if !isMainChat}
           <button
             type="button"
             disabled={isCreating || isArchiving}
@@ -240,6 +249,7 @@
           >
             Merge
           </button>
+          {/if}
           <button
             type="button"
             class="w-full px-2 py-1.5 rounded text-left text-xs text-danger hover:bg-hover"
@@ -250,7 +260,7 @@
           >
             Remove
           </button>
-          {#if onposttolinear}
+          {#if onposttolinear && !isMainChat}
             {@const isPostingLinear = postingLinear.has(wt.branch)}
             <div class="my-1 border-t border-edge"></div>
             <button

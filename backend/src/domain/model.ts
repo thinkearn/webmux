@@ -1,4 +1,5 @@
 import type { AgentId, RuntimeKind } from "./config";
+import type { MainChatSnapshot } from "./main-chat";
 
 export const WORKTREE_META_SCHEMA_VERSION = 1;
 export const WORKTREE_ARCHIVE_STATE_VERSION = 1;
@@ -247,6 +248,7 @@ export interface ProjectSnapshot {
     mainBranch: string;
   };
   worktrees: WorktreeSnapshot[];
+  mainChats: MainChatSnapshot[];
   notifications: NotificationView[];
 }
 

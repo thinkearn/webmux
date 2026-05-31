@@ -5,6 +5,7 @@
   import { FitAddon } from "@xterm/addon-fit";
   import { WebLinksAddon } from "@xterm/addon-web-links";
   import { uploadFiles } from "./api";
+  import type { TmuxLayoutSnapshot } from "./types";
   import "@xterm/xterm/css/xterm.css";
 
   let {
@@ -15,6 +16,7 @@
     agentTerminalStale = false,
     refreshingAgentTerminal = false,
     onrefreshagentterminal,
+    ontmuxlayout,
   }: {
     worktree: string;
     isMobile?: boolean;
@@ -23,6 +25,7 @@
     agentTerminalStale?: boolean;
     refreshingAgentTerminal?: boolean;
     onrefreshagentterminal?: () => void;
+    ontmuxlayout?: (layout: TmuxLayoutSnapshot) => void;
   } = $props();
 
   const DISCONNECTED_NOTICE = "\r\n\x1b[90m[Disconnected]\x1b[0m";
@@ -71,6 +74,28 @@
     if (ws?.readyState === WebSocket.OPEN) {
       ws.send(JSON.stringify({ type: "input", data }));
     }
+  }
+
+  function sendTmuxMessage(payload: Record<string, unknown>): void {
+    if (ws?.readyState === WebSocket.OPEN) {
+      ws.send(JSON.stringify(payload));
+    }
+  }
+
+  export function requestTmuxLayout(): void {
+    sendTmuxMessage({ type: "tmuxLayout" });
+  }
+
+  export function splitTmuxPane(split: "right" | "bottom"): void {
+    sendTmuxMessage({ type: "splitPane", split });
+  }
+
+  export function createTmuxWindow(): void {
+    sendTmuxMessage({ type: "newWindow" });
+  }
+
+  export function selectTmuxWindow(windowName: string): void {
+    sendTmuxMessage({ type: "selectTmuxWindow", window: windowName });
   }
 
   function handleTouchGestureEnd(): void {
@@ -290,6 +315,11 @@
             break;
           case "error":
             term.writeln(`\r\n\x1b[31m[Error: ${msg.message}]\x1b[0m`);
+            break;
+          case "tmuxLayout":
+            if (msg.layout) {
+              ontmuxlayout?.(msg.layout as TmuxLayoutSnapshot);
+            }
             break;
         }
       } catch {

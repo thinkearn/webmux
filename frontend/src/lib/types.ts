@@ -40,6 +40,8 @@ export type {
   CiCheck,
   CreateWorktreeRequest,
   CreateWorktreeResponse,
+  CreateMainChatRequest,
+  MainChatSnapshot,
   LinearIssue,
   LinearIssueAvailability,
   LinearIssueLabel,
@@ -76,6 +78,8 @@ export type {
 } from "@webmux/api-contract";
 export type { AgentsSendMessageRequest as AgentsUiSendMessageRequest } from "@webmux/api-contract";
 
+export type SidebarItemKind = "worktree" | "mainChat";
+
 export interface FileUploadResult {
   files: Array<{ path: string }>;
 }
@@ -88,6 +92,7 @@ export interface DiffDialogProps {
 
 export interface WorktreeInfo {
   branch: string;
+  kind?: SidebarItemKind;
   label: string | null;
   baseBranch?: string;
   archived: boolean;
@@ -117,6 +122,20 @@ export interface WorktreeInfo {
 export interface WorktreeListRow {
   worktree: WorktreeInfo;
   depth: number;
+}
+
+export interface TmuxLayoutWindow {
+  name: string;
+  paneCount: number;
+  active: boolean;
+}
+
+export interface TmuxLayoutSnapshot {
+  sessionName: string;
+  currentWindow: string;
+  windows: TmuxLayoutWindow[];
+  panes: number[];
+  activePane: number;
 }
 
 export type ToastTone = "info" | "success" | "error";

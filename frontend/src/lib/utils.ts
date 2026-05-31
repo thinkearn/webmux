@@ -1,4 +1,4 @@
-import type { PrEntry, WorktreeCreationPhase, WorktreeInfo } from "./types";
+import type { InstanceSummary, PrEntry, WorktreeCreationPhase, WorktreeInfo } from "./types";
 import { THEME_KEYS, getTheme } from "./themes";
 import type { ThemeKey } from "./themes";
 
@@ -148,4 +148,18 @@ export function resolveSelectedBranch(
 
   const open = selectableWorktrees.find((worktree) => worktree.mux === "✓");
   return (open ?? selectableWorktrees[0]).branch;
+}
+
+export function projectDirBasename(projectDir: string): string {
+  const trimmed = projectDir.trim().replace(/\/+$/, "");
+  if (!trimmed) return projectDir;
+  const parts = trimmed.split("/");
+  return parts[parts.length - 1] ?? projectDir;
+}
+
+export function buildWebmuxInstanceUrl(
+  instance: Pick<InstanceSummary, "port">,
+  loc: Pick<Location, "protocol" | "hostname"> = window.location,
+): string {
+  return `${loc.protocol}//${loc.hostname}:${instance.port}/`;
 }

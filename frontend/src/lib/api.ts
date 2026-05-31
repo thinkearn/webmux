@@ -13,6 +13,8 @@ import type {
   PostWorktreeToLinearResponse,
   PostWorktreeToLinearTarget,
   ProjectWorktreeSnapshot,
+  CreateMainChatRequest,
+  MainChatSnapshot,
   UpsertCustomAgentRequest,
   ValidateCustomAgentResponse,
   WorktreeInfo,
@@ -40,6 +42,7 @@ function mapAgentStatus(status: string): string {
 function mapWorktree(snapshot: ProjectWorktreeSnapshot): WorktreeInfo {
   return {
     branch: snapshot.branch,
+    kind: "worktree",
     label: snapshot.label,
     ...(snapshot.baseBranch ? { baseBranch: snapshot.baseBranch } : {}),
     archived: snapshot.archived,
@@ -67,6 +70,42 @@ function mapWorktree(snapshot: ProjectWorktreeSnapshot): WorktreeInfo {
   };
 }
 
+function mapMainChat(snapshot: MainChatSnapshot): WorktreeInfo {
+  return {
+    branch: snapshot.id,
+    kind: "mainChat",
+    label: snapshot.agentLabel ?? snapshot.agentId,
+    archived: false,
+    agent: mapAgentStatus(snapshot.status),
+    mux: snapshot.mux ? "✓" : "",
+    path: snapshot.path,
+    dir: snapshot.path,
+    dirty: false,
+    unpushed: false,
+    status: snapshot.status,
+    elapsed: snapshot.elapsed,
+    approvalPrompt: snapshot.approvalPrompt,
+    profile: snapshot.profile,
+    agentName: snapshot.agentId,
+    agentLabel: snapshot.agentLabel,
+    services: [],
+    paneCount: snapshot.paneCount,
+    prs: [],
+    linearIssue: null,
+    creating: false,
+    creationPhase: null,
+    source: "ui",
+    oneshot: null,
+  };
+}
+
+export function parseMainChatAgentId(selectionId: string): string | null {
+  const prefix = "main-chat:";
+  if (!selectionId.startsWith(prefix)) return null;
+  const agentId = selectionId.slice(prefix.length).trim();
+  return agentId.length > 0 ? agentId : null;
+}
+
 export function postWorktreeToLinear(
   branch: string,
   target: PostWorktreeToLinearTarget,
@@ -78,8 +117,81 @@ export function postWorktreeToLinear(
 }
 
 export async function fetchWorktrees(): Promise<WorktreeInfo[]> {
-  const response = await api.fetchWorktrees();
-  return response.worktrees.map((worktree) => mapWorktree(worktree));
+  const response = await api.fetchProject();
+  const worktrees = response.worktrees.map((worktree) => mapWorktree(worktree));
+  const mainChats = (response.mainChats ?? []).map((chat) => mapMainChat(chat));
+  return [...mainChats, ...worktrees];
+}
+
+export function createMainChat(body: CreateMainChatRequest): Promise<{ mainChat: MainChatSnapshot }> {
+  return api.createMainChat({ body });
+}
+
+export function closeMainChat(agentId: string): Promise<{ ok: true }> {
+  return api.closeMainChat({ params: { id: agentId } });
+}
+
+export function removeMainChat(agentId: string): Promise<{ ok: true }> {
+  return api.removeMainChat({ params: { id: agentId } });
+}
+
+export function attachMainChatConversation(agentId: string): Promise<AgentsUiWorktreeConversationResponse> {
+  return api.attachAgentsMainChatConversation({ params: { id: agentId } });
+}
+
+export function fetchMainChatConversationHistory(agentId: string): Promise<AgentsUiWorktreeConversationResponse> {
+  return api.fetchAgentsMainChatConversationHistory({ params: { id: agentId } });
+}
+
+export function sendMainChatConversationMessage(
+  agentId: string,
+  body: AgentsUiSendMessageRequest,
+): Promise<AgentsUiSendMessageResponse> {
+  return api.sendAgentsMainChatConversationMessage({ params: { id: agentId }, body });
+}
+
+export function interruptMainChatConversation(agentId: string): Promise<AgentsUiInterruptResponse> {
+  return api.interruptAgentsMainChatConversation({ params: { id: agentId } });
+}
+
+export function connectMainChatConversationStream(
+  agentId: string,
+  callbacks: {
+    onEvent: (event: AgentsUiConversationEvent) => void;
+    onError: (message: string) => void;
+    onClose?: () => void;
+  },
+): () => void {
+  const socket = new WebSocket(
+      `${window.location.protocol === "https:" ? "wss" : "ws"}://${window.location.host}${
+      apiPaths.streamAgentsMainChatConversation.replace(":id", encodeURIComponent(agentId))
+    }`,
+  );
+  let closedByClient = false;
+
+  socket.addEventListener("message", (event) => {
+    if (typeof event.data !== "string") return;
+    try {
+      callbacks.onEvent(AgentsUiConversationEventSchema.parse(JSON.parse(event.data)));
+    } catch {
+      callbacks.onError("Received malformed conversation stream data");
+    }
+  });
+
+  socket.addEventListener("error", () => {
+    callbacks.onError("Conversation stream connection failed");
+  });
+
+  socket.addEventListener("close", () => {
+    if (!closedByClient) {
+      callbacks.onClose?.();
+    }
+  });
+
+  return () => {
+    closedByClient = true;
+    socket.close();
+  };
 }
 
 export async function setWorktreeLabel(branch: string, label: string | null): Promise<string | null> {

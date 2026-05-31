@@ -6,6 +6,12 @@
     fetchWorktreeConversationHistory,
     interruptWorktreeConversation,
     sendWorktreeConversationMessage,
+    attachMainChatConversation,
+    connectMainChatConversationStream,
+    fetchMainChatConversationHistory,
+    interruptMainChatConversation,
+    sendMainChatConversationMessage,
+    parseMainChatAgentId,
   } from "./api";
   import {
     applyConversationMessageDelta,
@@ -32,6 +38,9 @@
     worktree,
     onConversationMessageSent = () => {},
   }: Props = $props();
+
+  const mainChatAgentId = $derived(parseMainChatAgentId(worktree.branch));
+  const isMainChat = $derived(worktree.kind === "mainChat" || mainChatAgentId !== null);
 
   let conversation = $state<AgentsUiConversationState | null>(null);
   let conversationError = $state<string | null>(null);
@@ -130,7 +139,19 @@
 
     closeConversationStream();
     lastStreamRevision = 0;
-    const disconnect = connectWorktreeConversationStream(worktree.branch, {
+    const disconnect = isMainChat && mainChatAgentId
+      ? connectMainChatConversationStream(mainChatAgentId, {
+          onEvent: (event) => {
+            handleConversationStreamEvent(conversationId, event);
+          },
+          onError: (message) => {
+            handleConversationStreamFailure(conversationId, message);
+          },
+          onClose: () => {
+            handleConversationStreamFailure(conversationId, "Conversation stream disconnected");
+          },
+        })
+      : connectWorktreeConversationStream(worktree.branch, {
       onEvent: (event) => {
         handleConversationStreamEvent(conversationId, event);
       },
@@ -145,6 +166,11 @@
   }
 
   function requestConversation(mode: "attach" | "history"): Promise<AgentsUiWorktreeConversationResponse> {
+    if (isMainChat && mainChatAgentId) {
+      return mode === "attach"
+        ? attachMainChatConversation(mainChatAgentId)
+        : fetchMainChatConversationHistory(mainChatAgentId);
+    }
     return mode === "attach"
       ? attachWorktreeConversation(worktree.branch)
       : fetchWorktreeConversationHistory(worktree.branch);
@@ -214,7 +240,9 @@
     conversationError = null;
     try {
       syncConversationStream(true);
-      const response = await sendWorktreeConversationMessage(worktree.branch, { text });
+      const response = isMainChat && mainChatAgentId
+        ? await sendMainChatConversationMessage(mainChatAgentId, { text })
+        : await sendWorktreeConversationMessage(worktree.branch, { text });
       composerText = "";
       if (conversation.conversationId !== response.conversationId) {
         conversation = {
@@ -239,7 +267,11 @@
     const baselineConversation = conversation;
     conversationError = null;
     try {
-      await interruptWorktreeConversation(worktree.branch);
+      if (isMainChat && mainChatAgentId) {
+        await interruptMainChatConversation(mainChatAgentId);
+      } else {
+        await interruptWorktreeConversation(worktree.branch);
+      }
       if (!supportsStreaming(conversation)) {
         startRefreshPolling(baselineConversation);
       }

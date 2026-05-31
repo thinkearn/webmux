@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
   import { fetchInstances } from "./api";
   import type { InstanceSummary } from "./types";
+  import { buildWebmuxInstanceUrl, projectDirBasename } from "./utils";
 
   let { selfName }: { selfName: string } = $props();
 
@@ -91,12 +92,12 @@
       </div>
       {#each instances as instance (instance.port)}
         <a
-          href={`/${instance.prefix}`}
+          href={buildWebmuxInstanceUrl(instance)}
           class="block px-3 py-2 text-[12px] hover:bg-hover border-t border-edge"
           role="menuitem"
         >
-          <div class="text-primary font-medium truncate">{instance.prefix}</div>
-          <div class="text-muted text-[11px] truncate">{instance.projectDir}</div>
+          <div class="text-primary font-medium truncate">{projectDirBasename(instance.projectDir)}</div>
+          <div class="text-muted text-[11px] truncate">:{instance.port} · {instance.projectDir}</div>
         </a>
       {/each}
     </div>

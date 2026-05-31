@@ -29,6 +29,9 @@ export interface TmuxGateway {
   setWindowOption(sessionName: string, windowName: string, option: string, value: string): void;
   runCommand(target: string, command: string): void;
   selectPane(target: string): void;
+  selectWindow(sessionName: string, windowName: string): void;
+  listPanes(sessionName: string, windowName: string): number[];
+  displayMessage(target: string, format: string): string;
   listWindows(): TmuxWindowSummary[];
 }
 
@@ -169,6 +172,26 @@ export class BunTmuxGateway implements TmuxGateway {
 
   selectPane(target: string): void {
     assertTmuxOk(["select-pane", "-t", target], `select tmux pane ${target}`);
+  }
+
+  selectWindow(sessionName: string, windowName: string): void {
+    assertTmuxOk(["select-window", "-t", `${sessionName}:${windowName}`], `select tmux window ${sessionName}:${windowName}`);
+  }
+
+  listPanes(sessionName: string, windowName: string): number[] {
+    const result = runTmux(["list-panes", "-t", `${sessionName}:${windowName}`, "-F", "#{pane_index}"]);
+    if (result.exitCode !== 0) return [];
+    return result.stdout
+      .split("\n")
+      .map((line) => parseInt(line.trim(), 10))
+      .filter((index) => Number.isInteger(index))
+      .sort((left, right) => left - right);
+  }
+
+  displayMessage(target: string, format: string): string {
+    const result = runTmux(["display-message", "-p", "-t", target, format]);
+    if (result.exitCode !== 0) return "";
+    return result.stdout.trim();
   }
 
   listWindows(): TmuxWindowSummary[] {

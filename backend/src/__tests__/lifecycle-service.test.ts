@@ -84,6 +84,18 @@ class FakeTmuxGateway implements TmuxGateway {
 
   selectPane(_target: string): void {}
 
+  selectWindow(_sessionName: string, _windowName: string): void {}
+
+  listPanes(sessionName: string, windowName: string): number[] {
+    const window = this.windows.get(this.key(sessionName, windowName));
+    if (!window) return [0];
+    return Array.from({ length: window.paneCount }, (_, index) => index);
+  }
+
+  displayMessage(_target: string, _format: string): string {
+    return "0";
+  }
+
   listWindows(): TmuxWindowSummary[] {
     return [...this.windows.values()].map((window) => ({ ...window }));
   }

@@ -386,6 +386,19 @@ export async function selectPane(attachId: string, paneIndex: number): Promise<v
   log.debug(`[term] selectPane(${attachId}) select=${r1.exitCode} zoom=${r2.exitCode}`);
 }
 
+export async function selectWindow(attachId: string, windowName: string): Promise<void> {
+  const session = sessions.get(attachId);
+  if (!session) {
+    log.debug(`[term] selectWindow(${attachId}) no session found`);
+    return;
+  }
+  session.windowName = windowName;
+  const target = `${session.groupedSessionName}:${windowName}`;
+  log.debug(`[term] selectWindow(${attachId}) target=${target}`);
+  const result = await tmuxExec(["tmux", "select-window", "-t", target]);
+  log.debug(`[term] selectWindow(${attachId}) exit=${result.exitCode}`);
+}
+
 export function clearCallbacks(attachId: string): void {
   const session = sessions.get(attachId);
   if (session) {

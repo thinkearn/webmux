@@ -1,4 +1,5 @@
 import type { CreatingWorktreeState, PrEntry, ProjectSnapshot, WorktreeSnapshot } from "../domain/model";
+import type { MainChatSnapshot } from "../domain/main-chat";
 import type { RuntimeNotification } from "./notification-service";
 import { ProjectRuntime } from "./project-runtime";
 
@@ -146,6 +147,7 @@ export function buildProjectSnapshot(input: BuildWorktreeSnapshotsInput & {
   projectName: string;
   mainBranch: string;
   notifications: RuntimeNotification[];
+  mainChats?: MainChatSnapshot[];
 }): ProjectSnapshot {
   return {
     project: {
@@ -153,6 +155,7 @@ export function buildProjectSnapshot(input: BuildWorktreeSnapshotsInput & {
       mainBranch: input.mainBranch,
     },
     worktrees: buildWorktreeSnapshots(input),
+    mainChats: input.mainChats ?? [],
     notifications: input.notifications.map((notification) => ({ ...notification })),
   };
 }

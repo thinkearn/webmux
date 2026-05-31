@@ -8,6 +8,7 @@ import {
   AgentsSendMessageRequestSchema,
   apiPaths,
   AvailableBranchesQuerySchema,
+  CreateMainChatRequestSchema,
   CreateWorktreeRequestSchema,
   NotificationIdParamsSchema,
   type OneshotConfig,
@@ -31,6 +32,7 @@ import {
   write,
   resize,
   selectPane,
+  selectWindow as selectTerminalWindow,
   sendKeys,
   getScrollback,
   setCallbacks,
@@ -106,7 +108,24 @@ import type {
 import type { OneshotMeta, ProjectSnapshot, WorktreeSnapshot } from "./domain/model";
 import { deriveInstancePrefix, isValidBranchName, isValidInstancePrefix, isValidWorktreeName } from "./domain/policies";
 import { createWebmuxRuntime } from "./runtime";
+import { buildWorktreeWindowName } from "./adapters/tmux";
+import { buildMainChatBranchName, buildMainChatId, parseMainChatId } from "./domain/main-chat";
 import { createInstanceRegistry, type InstanceEntry } from "./adapters/instance-registry";
+import {
+  createMainChatClaudeConversationService,
+  createMainChatMetaStore,
+  createMainChatWorktreeConversationService,
+} from "./services/main-chat-conversation-bridge";
+import { mainChatSnapshotToWorktreeSnapshot } from "./services/main-chat-service";
+import {
+  createTmuxShellWindow,
+  readTmuxLayout,
+  selectTmuxPane,
+  selectTmuxWindow,
+  splitTmuxPane,
+  type TmuxLayoutSnapshot,
+  type TmuxManagementContext,
+} from "./services/tmux-management-service";
 import { resolvePeerRedirect } from "./domain/peer-routing";
 
 const PORT = parseInt(Bun.env.PORT || "5111", 10);
@@ -145,6 +164,8 @@ const claudeConversationService = new ClaudeConversationService({
 });
 const removingBranches = new Set<string>();
 const lifecycleService = runtime.lifecycleService;
+const mainChatService = runtime.mainChatService;
+const PROJECT_GIT_DIR = git.resolveWorktreeGitDir(PROJECT_DIR);
 let linearAutoCreateEnabled = config.integrations.linear.autoCreateWorktrees;
 let stopLinearAutoCreate: (() => void) | null = null;
 let autoRemoveOnMergeEnabled = config.integrations.github.autoRemoveOnMerge;
@@ -319,11 +340,16 @@ interface TerminalWsData {
   worktreeId: string | null;
   attachId: string | null;
   attached: boolean;
+  tmuxSessionName: string | null;
+  tmuxWindowName: string | null;
+  tmuxCwd: string | null;
 }
 
 interface AgentsWsData {
   kind: "agents";
   branch: string;
+  agentId: string | null;
+  target: "worktree" | "mainChat";
   conversationId: string | null;
   unsubscribe: (() => void) | null;
 }
@@ -335,13 +361,18 @@ type WsInboundMessage =
   | { type: "input"; data: string }
   | { type: "sendKeys"; hexBytes: string[] }
   | { type: "selectPane"; pane: number }
-  | { type: "resize"; cols: number; rows: number; initialPane?: number };
+  | { type: "resize"; cols: number; rows: number; initialPane?: number }
+  | { type: "tmuxLayout" }
+  | { type: "splitPane"; split: "right" | "bottom" }
+  | { type: "newWindow"; name?: string }
+  | { type: "selectTmuxWindow"; window: string };
 
 type WsOutboundMessage =
   | { type: "output"; data: string }
   | { type: "exit"; exitCode: number }
   | { type: "error"; message: string }
-  | { type: "scrollback"; data: string };
+  | { type: "scrollback"; data: string }
+  | { type: "tmuxLayout"; layout: TmuxLayoutSnapshot };
 
 function parseWsMessage(raw: string | Buffer): WsInboundMessage | null {
   try {
@@ -367,6 +398,16 @@ function parseWsMessage(raw: string | Buffer): WsInboundMessage | null {
             initialPane: typeof m.initialPane === "number" ? m.initialPane : undefined,
           }
           : null;
+      case "tmuxLayout":
+        return { type: "tmuxLayout" };
+      case "splitPane":
+        return m.split === "right" || m.split === "bottom"
+          ? { type: "splitPane", split: m.split }
+          : null;
+      case "newWindow":
+        return { type: "newWindow", ...(typeof m.name === "string" ? { name: m.name } : {}) };
+      case "selectTmuxWindow":
+        return typeof m.window === "string" ? { type: "selectTmuxWindow", window: m.window } : null;
       default:
         return null;
     }
@@ -444,6 +485,20 @@ async function resolveTerminalWorktree(branch: string): Promise<{
   agentName: WorktreeSnapshot["agentName"];
 }> {
   ensureBranchNotBusy(branch);
+
+  const mainChatAgentId = parseMainChatId(branch);
+  if (mainChatAgentId) {
+    const terminal = await resolveMainChatTerminal(mainChatAgentId);
+    if (!terminal.ok) {
+      throw new Error(`Main chat session is not open for agent: ${mainChatAgentId}`);
+    }
+    return {
+      worktreeId: terminal.data.worktreeId,
+      attachTarget: terminal.data.attachTarget,
+      agentName: mainChatAgentId,
+    };
+  }
+
   let state = projectRuntime.getWorktreeByBranch(branch);
   if (!state || !state.session.exists || !state.session.sessionName) {
     await reconciliationService.reconcile(PROJECT_DIR);
@@ -519,6 +574,39 @@ function getAttachedSessionId(
   return null;
 }
 
+function readWsTmuxContext(data: TerminalWsData): TmuxManagementContext | null {
+  if (!data.tmuxSessionName || !data.tmuxWindowName || !data.tmuxCwd) return null;
+  return {
+    sessionName: data.tmuxSessionName,
+    windowName: data.tmuxWindowName,
+    cwd: data.tmuxCwd,
+  };
+}
+
+function resolveTmuxCwd(branch: string): string {
+  const mainChatAgentId = parseMainChatId(branch);
+  if (mainChatAgentId) return PROJECT_DIR;
+  const state = projectRuntime.getWorktreeByBranch(branch);
+  if (!state?.path) {
+    throw new Error(`Worktree not found: ${branch}`);
+  }
+  return state.path;
+}
+
+async function refreshTmuxSessions(): Promise<void> {
+  await mainChatService.reconcile();
+  await reconciliationService.reconcile(PROJECT_DIR);
+}
+
+function sendTmuxLayoutForWs(
+  ws: { send: (data: string) => void },
+  data: TerminalWsData,
+): void {
+  const context = readWsTmuxContext(data);
+  if (!context) return;
+  sendWs(ws, { type: "tmuxLayout", layout: readTmuxLayout(tmux, context) });
+}
+
 async function hasValidControlToken(req: Request): Promise<boolean> {
   const authHeader = req.headers.get("Authorization");
   const token = authHeader?.startsWith("Bearer ") ? authHeader.slice(7) : null;
@@ -557,6 +645,7 @@ async function readProjectSnapshot(): Promise<ProjectSnapshot> {
     ? fetchAssignedIssues()
     : Promise.resolve({ ok: true as const, data: [] });
   await reconciliationService.reconcile(PROJECT_DIR);
+  await mainChatService.reconcile();
   const archiveState = await archiveStateService.prune(projectRuntime.listWorktrees().map((worktree) => worktree.path));
   const linearResult = await linearIssuesPromise;
   const archivedPaths = buildArchivedWorktreePathSet(archiveState);
@@ -567,6 +656,7 @@ async function readProjectSnapshot(): Promise<ProjectSnapshot> {
     runtime: projectRuntime,
     creatingWorktrees: worktreeCreationTracker.list(),
     notifications: runtimeNotifications.list(),
+    mainChats: await mainChatService.listSnapshots(),
     isArchived: (path) => archivedPaths.has(normalizeArchivePath(path)),
     findLinearIssue: (branch) => {
       const match = linearIssues.find((issue) => branchMatchesIssue(branch, issue.branchName));
@@ -623,6 +713,270 @@ async function resolveAgentsWorktree(branch: string): Promise<{
     ok: true,
     worktree,
   };
+}
+
+function resolveMainChatAgentChatSupport(agentId: string, action: "chat" | "interrupt") {
+  const snapshot = projectRuntime.getMainChatByAgent(agentId);
+  return resolveAgentChatSupport({
+    agentId: snapshot?.agentId ?? agentId,
+    agentLabel: getAgentDefinition(config, agentId)?.label ?? agentId,
+    agent: getAgentDefinition(config, agentId),
+    action,
+  });
+}
+
+function buildMainChatConversationServices(agentId: string): {
+  codex: WorktreeConversationService;
+  claude: ClaudeConversationService;
+} {
+  const metaStore = createMainChatMetaStore(PROJECT_GIT_DIR, agentId, config.workspace.mainBranch);
+  return {
+    codex: createMainChatWorktreeConversationService({
+      appServer: codexAppServerClient,
+      git,
+    }, metaStore),
+    claude: createMainChatClaudeConversationService({
+      claude: claudeCliClient,
+      git,
+    }, metaStore),
+  };
+}
+
+async function resolveMainChatWorktree(agentId: string): Promise<{
+  ok: true;
+  worktree: WorktreeSnapshot;
+} | {
+  ok: false;
+  response: Response;
+}> {
+  try {
+    const snapshot = await mainChatService.requireMainChatSnapshot(agentId);
+    return {
+      ok: true,
+      worktree: mainChatSnapshotToWorktreeSnapshot(snapshot, (id) =>
+        id ? getAgentDefinition(config, id)?.label ?? id : null
+      ),
+    };
+  } catch (error) {
+    if (error instanceof LifecycleError) {
+      return {
+        ok: false,
+        response: errorResponse(error.message, error.status),
+      };
+    }
+    throw error;
+  }
+}
+
+async function resolveMainChatTerminal(agentId: string): Promise<{
+  ok: true;
+  data: {
+    worktreeId: string;
+    attachTarget: TerminalAttachTarget;
+  };
+} | {
+  ok: false;
+  response: Response;
+}> {
+  await mainChatService.reconcile();
+  const state = projectRuntime.getMainChatByAgent(agentId);
+  if (!state || !state.session.exists || !state.session.sessionName) {
+    return {
+      ok: false,
+      response: errorResponse(`Main chat session is not open for agent: ${agentId}`, 409),
+    };
+  }
+
+  return {
+    ok: true,
+    data: {
+      worktreeId: state.chatId,
+      attachTarget: {
+        ownerSessionName: state.session.sessionName,
+        windowName: buildWorktreeWindowName(buildMainChatBranchName(agentId)),
+      },
+    },
+  };
+}
+
+async function apiListMainChats(): Promise<Response> {
+  touchDashboardActivity();
+  return jsonResponse({ mainChats: await mainChatService.listSnapshots() });
+}
+
+async function apiCreateMainChat(req: Request): Promise<Response> {
+  touchDashboardActivity();
+  const parsed = await parseJsonBody(req, CreateMainChatRequestSchema);
+  if (!parsed.ok) return parsed.response;
+
+  const mainChat = await mainChatService.createMainChat({
+    agent: parsed.data.agent,
+    ...(parsed.data.profile ? { profile: parsed.data.profile } : {}),
+    ...(parsed.data.prompt?.trim() ? { prompt: parsed.data.prompt.trim() } : {}),
+  });
+  return jsonResponse({ mainChat }, 201);
+}
+
+async function apiCloseMainChat(agentId: string): Promise<Response> {
+  touchDashboardActivity();
+  await mainChatService.closeMainChat(agentId);
+  return jsonResponse({ ok: true });
+}
+
+async function apiRemoveMainChat(agentId: string): Promise<Response> {
+  touchDashboardActivity();
+  await mainChatService.removeMainChat(agentId);
+  return jsonResponse({ ok: true });
+}
+
+async function apiAttachAgentsMainChat(agentId: string): Promise<Response> {
+  touchDashboardActivity();
+  const resolved = await resolveMainChatWorktree(agentId);
+  if (!resolved.ok) return resolved.response;
+
+  const chatSupport = resolveMainChatAgentChatSupport(agentId, "chat");
+  if (!chatSupport.ok) {
+    return errorResponse(chatSupport.error, chatSupport.status);
+  }
+
+  const services = buildMainChatConversationServices(agentId);
+  const result = chatSupport.data.provider === "claude"
+    ? await services.claude.attachWorktreeConversation(resolved.worktree, chatSupport.data.claude)
+    : await services.codex.attachWorktreeConversation(resolved.worktree);
+  return result.ok
+    ? jsonResponse(result.data)
+    : errorResponse(result.error, result.status);
+}
+
+async function apiGetAgentsMainChatHistory(agentId: string): Promise<Response> {
+  touchDashboardActivity();
+  const resolved = await resolveMainChatWorktree(agentId);
+  if (!resolved.ok) return resolved.response;
+
+  const chatSupport = resolveMainChatAgentChatSupport(agentId, "chat");
+  if (!chatSupport.ok) {
+    return errorResponse(chatSupport.error, chatSupport.status);
+  }
+
+  const services = buildMainChatConversationServices(agentId);
+  const result = chatSupport.data.provider === "claude"
+    ? await services.claude.readWorktreeConversation(resolved.worktree, chatSupport.data.claude)
+    : await services.codex.readWorktreeConversation(resolved.worktree);
+  return result.ok
+    ? jsonResponse(result.data)
+    : errorResponse(result.error, result.status);
+}
+
+async function apiSendAgentsMainChatMessage(agentId: string, req: Request): Promise<Response> {
+  touchDashboardActivity();
+  const parsed = await parseJsonBody(req, AgentsSendMessageRequestSchema);
+  if (!parsed.ok) return parsed.response;
+
+  const resolved = await resolveMainChatWorktree(agentId);
+  if (!resolved.ok) return resolved.response;
+  if (!resolved.worktree.mux) {
+    return errorResponse("Open this project chat before sending messages here", 409);
+  }
+
+  const chatSupport = resolveMainChatAgentChatSupport(agentId, "chat");
+  if (!chatSupport.ok) {
+    return errorResponse(chatSupport.error, chatSupport.status);
+  }
+
+  const services = buildMainChatConversationServices(agentId);
+  const conversationResult = chatSupport.data.provider === "claude"
+    ? await services.claude.readWorktreeConversation(resolved.worktree, chatSupport.data.claude)
+    : await services.codex.readWorktreeConversation(resolved.worktree);
+  if (!conversationResult.ok) {
+    return errorResponse(conversationResult.error, conversationResult.status);
+  }
+
+  const terminalMainChat = await resolveMainChatTerminal(agentId);
+  if (!terminalMainChat.ok) return terminalMainChat.response;
+  const sendResult = await sendTerminalPrompt(
+    terminalMainChat.data.worktreeId,
+    terminalMainChat.data.attachTarget,
+    parsed.data.text,
+    0,
+    undefined,
+    chatSupport.data.submitDelayMs,
+  );
+  if (!sendResult.ok) {
+    return errorResponse(sendResult.error, 503);
+  }
+
+  return jsonResponse({
+    conversationId: conversationResult.data.conversation.conversationId,
+    turnId: `tmux:${crypto.randomUUID()}`,
+    running: true,
+  });
+}
+
+async function apiInterruptAgentsMainChat(agentId: string): Promise<Response> {
+  touchDashboardActivity();
+  const resolved = await resolveMainChatWorktree(agentId);
+  if (!resolved.ok) return resolved.response;
+  if (!resolved.worktree.mux) {
+    return errorResponse("Open this project chat before interrupting it here", 409);
+  }
+
+  const chatSupport = resolveMainChatAgentChatSupport(agentId, "interrupt");
+  if (!chatSupport.ok) {
+    return errorResponse(chatSupport.error, chatSupport.status);
+  }
+
+  const services = buildMainChatConversationServices(agentId);
+  const conversationResult = chatSupport.data.provider === "claude"
+    ? await services.claude.readWorktreeConversation(resolved.worktree, chatSupport.data.claude)
+    : await services.codex.readWorktreeConversation(resolved.worktree);
+  if (!conversationResult.ok) {
+    return errorResponse(conversationResult.error, conversationResult.status);
+  }
+
+  const terminalMainChat = await resolveMainChatTerminal(agentId);
+  if (!terminalMainChat.ok) return terminalMainChat.response;
+  const interruptResult = await interruptPrompt(terminalMainChat.data.attachTarget, 0);
+  if (!interruptResult.ok) {
+    return errorResponse(interruptResult.error, 503);
+  }
+
+  return jsonResponse({
+    conversationId: conversationResult.data.conversation.conversationId,
+    turnId: conversationResult.data.conversation.activeTurnId ?? `tmux:${crypto.randomUUID()}`,
+    interrupted: true,
+  });
+}
+
+async function loadMainChatConversationSnapshot(agentId: string): Promise<{
+  ok: true;
+  data: AgentsUiWorktreeConversationResponse;
+} | {
+  ok: false;
+  message: string;
+}> {
+  const resolved = await resolveMainChatWorktree(agentId);
+  if (!resolved.ok) {
+    return {
+      ok: false,
+      message: await readErrorMessage(resolved.response),
+    };
+  }
+
+  const chatSupport = resolveMainChatAgentChatSupport(agentId, "chat");
+  if (!chatSupport.ok) {
+    return {
+      ok: false,
+      message: chatSupport.error,
+    };
+  }
+
+  const services = buildMainChatConversationServices(agentId);
+  const result = chatSupport.data.provider === "claude"
+    ? await services.claude.readWorktreeConversation(resolved.worktree, chatSupport.data.claude)
+    : await services.codex.readWorktreeConversation(resolved.worktree);
+  return result.ok
+    ? { ok: true, data: result.data }
+    : { ok: false, message: result.error };
 }
 
 function resolveWorktreeAgentChatSupport(worktree: WorktreeSnapshot, action: "chat" | "interrupt") {
@@ -877,7 +1231,9 @@ async function openAgentsSocket(
     unsubscribeNotifications();
   };
 
-  const initialState = await loadAgentsConversationInitialState(data.branch);
+  const initialState = data.target === "mainChat" && data.agentId
+    ? await loadMainChatConversationSnapshot(data.agentId)
+    : await loadAgentsConversationInitialState(data.branch);
   if (socketClosed) return;
   if (!initialState.ok) {
     unsubscribeNotifications();
@@ -921,7 +1277,11 @@ async function apiRuntimeEvent(req: Request): Promise<Response> {
   if (!event) return errorResponse("Invalid runtime event body", 400);
 
   try {
-    projectRuntime.applyEvent(event);
+    if (projectRuntime.getMainChat(event.worktreeId)) {
+      projectRuntime.applyMainChatEvent(event);
+    } else {
+      projectRuntime.applyEvent(event);
+    }
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     if (message.includes("Unknown worktree id")) {
@@ -1610,7 +1970,32 @@ function startServer(port: number): ReturnType<typeof Bun.serve> {
   routes: {
     [apiPaths.streamAgentsWorktreeConversation]: (req, server) => {
       const branch = decodeURIComponent(req.params.name);
-      return server.upgrade(req, { data: { kind: "agents", branch, conversationId: null, unsubscribe: null } })
+      return server.upgrade(req, {
+        data: {
+          kind: "agents",
+          branch,
+          agentId: null,
+          target: "worktree",
+          conversationId: null,
+          unsubscribe: null,
+        },
+      })
+        ? undefined
+        : new Response("WebSocket upgrade failed", { status: 400 });
+    },
+
+    [apiPaths.streamAgentsMainChatConversation]: (req, server) => {
+      const agentId = decodeURIComponent(req.params.id);
+      return server.upgrade(req, {
+        data: {
+          kind: "agents",
+          branch: buildMainChatId(agentId),
+          agentId,
+          target: "mainChat",
+          conversationId: null,
+          unsubscribe: null,
+        },
+      })
         ? undefined
         : new Response("WebSocket upgrade failed", { status: 400 });
     },
@@ -1618,7 +2003,7 @@ function startServer(port: number): ReturnType<typeof Bun.serve> {
     "/ws/:worktree": (req, server) => {
       const branch = decodeURIComponent(req.params.worktree);
       return server.upgrade(req, {
-        data: { kind: "terminal", branch, worktreeId: null, attachId: null, attached: false },
+        data: { kind: "terminal", branch, worktreeId: null, attachId: null, attached: false, tmuxSessionName: null, tmuxWindowName: null, tmuxCwd: null },
       })
         ? undefined
         : new Response("WebSocket upgrade failed", { status: 400 });
@@ -1700,6 +2085,71 @@ function startServer(port: number): ReturnType<typeof Bun.serve> {
         return catching(
           `POST ${apiPaths.interruptAgentsWorktreeConversation}`,
           () => apiInterruptAgentsWorktree(name),
+        );
+      },
+    },
+
+    [apiPaths.fetchMainChats]: {
+      GET: () => catching("GET /api/main-chats", () => apiListMainChats()),
+      POST: (req) => catching("POST /api/main-chats", () => apiCreateMainChat(req)),
+    },
+
+    [apiPaths.closeMainChat]: {
+      POST: (req) => {
+        const parsed = parseAgentIdParam(req.params);
+        if (!parsed.ok) return parsed.response;
+        return catching(`POST /api/main-chats/${parsed.data}/close`, () => apiCloseMainChat(parsed.data));
+      },
+    },
+
+    [apiPaths.removeMainChat]: {
+      DELETE: (req) => {
+        const parsed = parseAgentIdParam(req.params);
+        if (!parsed.ok) return parsed.response;
+        return catching(`DELETE /api/main-chats/${parsed.data}`, () => apiRemoveMainChat(parsed.data));
+      },
+    },
+
+    [apiPaths.attachAgentsMainChatConversation]: {
+      POST: (req) => {
+        const parsed = parseAgentIdParam(req.params);
+        if (!parsed.ok) return parsed.response;
+        return catching(
+          `POST ${apiPaths.attachAgentsMainChatConversation}`,
+          () => apiAttachAgentsMainChat(parsed.data),
+        );
+      },
+    },
+
+    [apiPaths.fetchAgentsMainChatConversationHistory]: {
+      GET: (req) => {
+        const parsed = parseAgentIdParam(req.params);
+        if (!parsed.ok) return parsed.response;
+        return catching(
+          `GET ${apiPaths.fetchAgentsMainChatConversationHistory}`,
+          () => apiGetAgentsMainChatHistory(parsed.data),
+        );
+      },
+    },
+
+    [apiPaths.sendAgentsMainChatConversationMessage]: {
+      POST: (req) => {
+        const parsed = parseAgentIdParam(req.params);
+        if (!parsed.ok) return parsed.response;
+        return catching(
+          `POST ${apiPaths.sendAgentsMainChatConversationMessage}`,
+          () => apiSendAgentsMainChatMessage(parsed.data, req),
+        );
+      },
+    },
+
+    [apiPaths.interruptAgentsMainChatConversation]: {
+      POST: (req) => {
+        const parsed = parseAgentIdParam(req.params);
+        if (!parsed.ok) return parsed.response;
+        return catching(
+          `POST ${apiPaths.interruptAgentsMainChatConversation}`,
+          () => apiInterruptAgentsMainChat(parsed.data),
         );
       },
     },
@@ -1975,7 +2425,53 @@ function startServer(port: number): ReturnType<typeof Bun.serve> {
             const attachId = getAttachedSessionId(data, ws);
             if (!attachId) return;
             log.debug(`[ws] selectPane pane=${msg.pane} branch=${branch} attachId=${attachId}`);
+            const context = readWsTmuxContext(data);
+            if (context) {
+              selectTmuxPane(tmux, context, msg.pane);
+            }
             await selectPane(attachId, msg.pane);
+            sendTmuxLayoutForWs(ws, data);
+          }
+          break;
+        case "tmuxLayout":
+          if (!data.attached) return;
+          sendTmuxLayoutForWs(ws, data);
+          break;
+        case "splitPane":
+          {
+            const attachId = getAttachedSessionId(data, ws);
+            if (!attachId) return;
+            const context = readWsTmuxContext(data);
+            if (!context) return;
+            splitTmuxPane(tmux, context, msg.split);
+            await refreshTmuxSessions();
+            sendTmuxLayoutForWs(ws, data);
+          }
+          break;
+        case "newWindow":
+          {
+            const attachId = getAttachedSessionId(data, ws);
+            if (!attachId) return;
+            const context = readWsTmuxContext(data);
+            if (!context) return;
+            const createdWindow = createTmuxShellWindow(tmux, context, msg.name);
+            const nextContext = selectTmuxWindow(tmux, context, createdWindow);
+            data.tmuxWindowName = nextContext.windowName;
+            await selectTerminalWindow(attachId, createdWindow);
+            await refreshTmuxSessions();
+            sendTmuxLayoutForWs(ws, data);
+          }
+          break;
+        case "selectTmuxWindow":
+          {
+            const attachId = getAttachedSessionId(data, ws);
+            if (!attachId) return;
+            const context = readWsTmuxContext(data);
+            if (!context) return;
+            const nextContext = selectTmuxWindow(tmux, context, msg.window);
+            data.tmuxWindowName = nextContext.windowName;
+            await selectTerminalWindow(attachId, nextContext.windowName);
+            sendTmuxLayoutForWs(ws, data);
           }
           break;
         case "resize":
@@ -1998,6 +2494,9 @@ function startServer(port: number): ReturnType<typeof Bun.serve> {
                 msg.rows,
                 msg.initialPane,
               );
+              data.tmuxSessionName = terminalWorktree.attachTarget.ownerSessionName;
+              data.tmuxWindowName = terminalWorktree.attachTarget.windowName;
+              data.tmuxCwd = resolveTmuxCwd(branch);
               const { onData, onExit } = makeCallbacks(ws);
               setCallbacks(attachId, onData, onExit);
               const scrollback = getScrollback(attachId);
@@ -2007,6 +2506,7 @@ function startServer(port: number): ReturnType<typeof Bun.serve> {
               if (scrollback.length > 0) {
                 sendWs(ws, { type: "scrollback", data: scrollback });
               }
+              sendTmuxLayoutForWs(ws, data);
             } catch (err: unknown) {
               const errMsg = err instanceof Error ? err.message : String(err);
               data.attached = false;

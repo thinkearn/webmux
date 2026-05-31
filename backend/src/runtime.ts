@@ -12,6 +12,7 @@ import { NotificationService as RuntimeNotificationService } from "./services/no
 import { ProjectRuntime } from "./services/project-runtime";
 import { ReconciliationService } from "./services/reconciliation-service";
 import { WorktreeCreationTracker } from "./services/worktree-creation-service";
+import { MainChatService } from "./services/main-chat-service";
 
 export interface WebmuxRuntimeOptions {
   projectDir?: string;
@@ -35,6 +36,7 @@ export interface WebmuxRuntime {
   runtimeNotifications: RuntimeNotificationService;
   reconciliationService: ReconciliationService;
   lifecycleService: LifecycleService;
+  mainChatService: MainChatService;
 }
 
 export function createWebmuxRuntime(options: WebmuxRuntimeOptions = {}): WebmuxRuntime {
@@ -79,6 +81,19 @@ export function createWebmuxRuntime(options: WebmuxRuntimeOptions = {}): WebmuxR
     },
   });
 
+  const mainChatService = new MainChatService({
+    projectRoot: projectDir,
+    projectGitDir: git.resolveWorktreeGitDir(projectDir),
+    mainBranch: config.workspace.mainBranch,
+    controlBaseUrl: `http://127.0.0.1:${port}`,
+    getControlToken: loadControlToken,
+    config,
+    git,
+    tmux,
+    runtime: projectRuntime,
+    reconciliation: reconciliationService,
+  });
+
   return {
     port,
     projectDir,
@@ -95,5 +110,6 @@ export function createWebmuxRuntime(options: WebmuxRuntimeOptions = {}): WebmuxR
     runtimeNotifications,
     reconciliationService,
     lifecycleService,
+    mainChatService,
   };
 }

@@ -393,12 +393,40 @@ export const ProjectWorktreeSnapshotSchema = z.object({
   oneshot: OneshotConfigSchema.nullable(),
 });
 
+export const MainChatSnapshotSchema = z.object({
+  id: z.string(),
+  agentId: AgentIdSchema,
+  agentLabel: z.string().nullable(),
+  profile: z.string().nullable(),
+  path: z.string(),
+  mux: z.boolean(),
+  status: z.string(),
+  elapsed: z.string(),
+  approvalPrompt: AgentsUiApprovalPromptSchema.nullable(),
+  paneCount: z.number(),
+});
+
+export const MainChatListResponseSchema = z.object({
+  mainChats: z.array(MainChatSnapshotSchema),
+});
+
+export const CreateMainChatRequestSchema = z.object({
+  agent: AgentIdSchema,
+  profile: z.string().optional(),
+  prompt: z.string().optional(),
+});
+
+export const CreateMainChatResponseSchema = z.object({
+  mainChat: MainChatSnapshotSchema,
+});
+
 export const ProjectSnapshotSchema = z.object({
   project: z.object({
     name: z.string(),
     mainBranch: z.string(),
   }),
   worktrees: z.array(ProjectWorktreeSnapshotSchema),
+  mainChats: z.array(MainChatSnapshotSchema),
   notifications: z.array(AppNotificationSchema),
 });
 
@@ -666,6 +694,10 @@ export type AutoNameConfigResponse = z.infer<typeof AutoNameConfigResponseSchema
 export type WorktreeCreationState = z.infer<typeof WorktreeCreationStateSchema>;
 export type AppNotification = z.infer<typeof AppNotificationSchema>;
 export type ProjectWorktreeSnapshot = z.infer<typeof ProjectWorktreeSnapshotSchema>;
+export type MainChatSnapshot = z.infer<typeof MainChatSnapshotSchema>;
+export type MainChatListResponse = z.infer<typeof MainChatListResponseSchema>;
+export type CreateMainChatRequest = z.infer<typeof CreateMainChatRequestSchema>;
+export type CreateMainChatResponse = z.infer<typeof CreateMainChatResponseSchema>;
 export type ProjectSnapshot = z.infer<typeof ProjectSnapshotSchema>;
 export type WorktreeConversationProvider = z.infer<typeof WorktreeConversationProviderSchema>;
 export type CodexWorktreeConversationRef = z.infer<typeof CodexWorktreeConversationRefSchema>;

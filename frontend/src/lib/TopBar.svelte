@@ -82,9 +82,16 @@
   }
 
   let cursorUrl = $derived(makeCursorUrl(worktree?.dir, sshHost));
+  let isMainChat = $derived(worktree?.kind === "mainChat");
   let headerName = $derived(worktree?.label ?? name);
   let displayName = $derived(truncateWorktreeName(headerName, 30));
-  let displayBranch = $derived(worktree?.label ? truncateWorktreeName(name, 44) : null);
+  let displayBranch = $derived(
+    isMainChat
+      ? "Project root chat"
+      : worktree?.label
+        ? truncateWorktreeName(name, 44)
+        : null,
+  );
 
   // Split PRs into main repo vs linked repo groups
   let mainPrs = $derived(
@@ -145,7 +152,7 @@
             <span class="min-w-0 text-sm font-semibold truncate" title={headerName ?? undefined}
               >{displayName ?? "Select a worktree"}</span
             >
-            {#if worktree && oneditlabel}
+            {#if worktree && oneditlabel && !isMainChat}
               <button
                 type="button"
                 class="shrink-0 p-0.5 rounded text-muted hover:text-primary hover:bg-hover"
@@ -174,22 +181,23 @@
             <span class="text-[10px] text-muted truncate" title={name ?? undefined}>{displayBranch}</span>
           {/if}
         </span>
-        {#if worktree?.archived}
+        {#if worktree?.archived && !isMainChat}
           <span class="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-edge text-muted">Archived</span>
         {/if}
-        {#if worktree?.dirty || worktree?.unpushed}
+        {#if !isMainChat && (worktree?.dirty || worktree?.unpushed)}
           <button
             type="button"
             class="shrink-0 text-[10px] px-1.5 py-0.5 rounded border border-warning/40 text-warning bg-transparent cursor-pointer hover:bg-warning/10"
             onclick={ondirtyclick}
           >{worktree.dirty ? "dirty" : "unpushed"}</button>
         {/if}
-        {#if worktree?.linearIssue}
+        {#if worktree?.linearIssue && !isMainChat}
           <LinearBadge issue={worktree.linearIssue} clickable={true} />
         {/if}
       </div>
       {#if !isMobile}
         <div class="topbar-main-prs min-w-0 flex-1">
+          {#if !isMainChat}
           <RepoGroup
             prs={mainPrs}
             services={worktree?.services ?? []}
@@ -197,6 +205,7 @@
             {onCiClick}
             {onReviewsClick}
           />
+          {/if}
         </div>
       {/if}
     </div>
@@ -204,6 +213,7 @@
     <!-- Linked repo rows (desktop only) -->
     {#if !isMobile}
       {#each linkedRepoGroups as group (group.alias)}
+        {#if !isMainChat}
         <RepoGroup
           label={group.alias}
           prs={group.prs}
@@ -211,6 +221,7 @@
           {onCiClick}
           {onReviewsClick}
         />
+        {/if}
       {/each}
     {/if}
   </div>
@@ -219,10 +230,11 @@
   <div class="shrink-0 flex gap-2 items-center px-4">
     {#if worktree}
       {#if worktree.mux === "✓"}
-        <Btn variant="default" onclick={onclose} title="Close worktree window"
+        <Btn variant="default" onclick={onclose} title={isMainChat ? "Close chat window" : "Close worktree window"}
           >{isMobile ? "C" : "Close"}</Btn
         >
       {/if}
+      {#if !isMainChat}
       <Btn
         variant="accent-outline"
         onclick={onarchive}
@@ -234,7 +246,8 @@
       <Btn variant="accent-outline" onclick={onmerge} title="Merge worktree"
         >{isMobile ? "M" : "Merge"}</Btn
       >
-      <Btn variant="danger-outline" onclick={onremove} title="Remove worktree"
+      {/if}
+      <Btn variant="danger-outline" onclick={onremove} title={isMainChat ? "Remove chat" : "Remove worktree"}
         >{isMobile ? "R" : "Remove"}</Btn
       >
     {/if}

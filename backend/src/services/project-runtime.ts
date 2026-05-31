@@ -11,6 +11,7 @@ import type {
   WorktreeSource,
 } from "../domain/model";
 import { buildWorktreeWindowName } from "../adapters/tmux";
+import type { MainChatRuntimeState } from "../domain/main-chat";
 
 function isoNow(now?: () => Date): string {
   return (now ?? (() => new Date()))().toISOString();
@@ -77,6 +78,132 @@ function clonePrEntry(pr: PrEntry): PrEntry {
 export class ProjectRuntime {
   private readonly worktrees = new Map<string, ManagedWorktreeRuntimeState>();
   private readonly worktreeIdsByBranch = new Map<string, string>();
+  private readonly mainChats = new Map<string, MainChatRuntimeState>();
+  private readonly mainChatIdsByAgent = new Map<string, string>();
+
+  upsertMainChat(input: {
+    chatId: string;
+    agentId: AgentId;
+    profile: string | null;
+    path: string;
+    createdAt: string;
+  }): MainChatRuntimeState {
+    const existing = this.mainChats.get(input.chatId);
+    if (existing) {
+      existing.profile = input.profile;
+      existing.path = input.path;
+      existing.createdAt = input.createdAt;
+      this.mainChatIdsByAgent.set(input.agentId, input.chatId);
+      return existing;
+    }
+
+    const created: MainChatRuntimeState = {
+      chatId: input.chatId,
+      agentId: input.agentId,
+      profile: input.profile,
+      path: input.path,
+      createdAt: input.createdAt,
+      session: {
+        exists: false,
+        sessionName: null,
+        paneCount: 0,
+      },
+      agent: {
+        lifecycle: "closed",
+        lastStartedAt: null,
+        lastEventAt: null,
+        lastError: null,
+        approvalPrompt: null,
+      },
+    };
+    this.mainChats.set(input.chatId, created);
+    this.mainChatIdsByAgent.set(input.agentId, input.chatId);
+    return created;
+  }
+
+  removeMainChat(chatId: string): boolean {
+    const state = this.mainChats.get(chatId);
+    if (!state) return false;
+    this.mainChatIdsByAgent.delete(state.agentId);
+    return this.mainChats.delete(chatId);
+  }
+
+  getMainChat(chatId: string): MainChatRuntimeState | null {
+    return this.mainChats.get(chatId) ?? null;
+  }
+
+  getMainChatByAgent(agentId: AgentId): MainChatRuntimeState | null {
+    const chatId = this.mainChatIdsByAgent.get(agentId);
+    return chatId ? this.mainChats.get(chatId) ?? null : null;
+  }
+
+  listMainChats(): MainChatRuntimeState[] {
+    return [...this.mainChats.values()].sort((left, right) => left.agentId.localeCompare(right.agentId));
+  }
+
+  setMainChatSessionState(
+    chatId: string,
+    patch: Partial<MainChatRuntimeState["session"]>,
+  ): MainChatRuntimeState {
+    const state = this.requireMainChat(chatId);
+    state.session = { ...state.session, ...patch };
+    if (patch.exists === true && state.agent.lifecycle === "closed") {
+      state.agent.lifecycle = "running";
+      state.agent.lastStartedAt = state.agent.lastStartedAt ?? isoNow();
+    }
+    if (patch.exists === false) {
+      state.agent.lifecycle = "closed";
+      state.agent.approvalPrompt = null;
+    }
+    return state;
+  }
+
+  applyMainChatEvent(event: RuntimeEvent, now?: () => Date): MainChatRuntimeState {
+    const state = this.requireMainChat(event.worktreeId);
+    const timestamp = isoNow(now);
+
+    switch (event.type) {
+      case "agent_stopped":
+        state.agent.lifecycle = "stopped";
+        state.agent.lastEventAt = timestamp;
+        state.agent.approvalPrompt = null;
+        break;
+      case "agent_status_changed":
+        state.agent.lifecycle = event.lifecycle;
+        state.agent.lastEventAt = timestamp;
+        if (state.agent.lastStartedAt === null && event.lifecycle === "running") {
+          state.agent.lastStartedAt = timestamp;
+        }
+        if (event.lifecycle !== "idle") {
+          state.agent.approvalPrompt = null;
+        }
+        state.agent.lastError = null;
+        break;
+      case "agent_approval_requested":
+        state.agent.lifecycle = "idle";
+        state.agent.lastEventAt = timestamp;
+        state.agent.lastError = null;
+        state.agent.approvalPrompt = {
+          id: `${timestamp}:${event.kind}`,
+          kind: event.kind,
+          title: "Approval required",
+          message: event.message?.trim() || "Claude is waiting for approval in the terminal.",
+          createdAt: timestamp,
+        };
+        break;
+      case "runtime_error":
+        state.agent.lifecycle = "error";
+        state.agent.lastError = event.message;
+        state.agent.lastEventAt = timestamp;
+        state.agent.approvalPrompt = null;
+        break;
+      case "pr_opened":
+        state.agent.lastEventAt = timestamp;
+        break;
+    }
+
+    return state;
+  }
 
   upsertWorktree(input: {
     worktreeId: string;
@@ -270,6 +397,14 @@ export class ProjectRuntime {
       this.worktreeIdsByBranch.delete(previousBranch);
     }
     this.worktreeIdsByBranch.set(nextBranch, worktreeId);
+  }
+
+  private requireMainChat(chatId: string): MainChatRuntimeState {
+    const state = this.mainChats.get(chatId);
+    if (!state) {
+      throw new Error(`Unknown main chat id: ${chatId}`);
+    }
+    return state;
   }
 
   private requireWorktree(worktreeId: string): ManagedWorktreeRuntimeState {

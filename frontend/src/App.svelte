@@ -5,15 +5,17 @@
   import Terminal from "./lib/Terminal.svelte";
   import ConfirmDialog from "./lib/ConfirmDialog.svelte";
   import CreateWorktreeDialog from "./lib/CreateWorktreeDialog.svelte";
+  import NewMainChatDialog from "./lib/NewMainChatDialog.svelte";
   import SettingsDialog from "./lib/SettingsDialog.svelte";
   import CiDetailsDialog from "./lib/CiDetailsDialog.svelte";
   import CommentReviewDialog from "./lib/CommentReviewDialog.svelte";
-  import PaneBar from "./lib/PaneBar.svelte";
   import ToastStack from "./lib/ToastStack.svelte";
   import LinearPanel from "./lib/LinearPanel.svelte";
   import LinearDetailDialog from "./lib/LinearDetailDialog.svelte";
   import LinearPostDialog from "./lib/LinearPostDialog.svelte";
   import MobileChatSurface from "./lib/MobileChatSurface.svelte";
+  import SessionViewToggle from "./lib/SessionViewToggle.svelte";
+  import TmuxManagerBar from "./lib/TmuxManagerBar.svelte";
   import WorktreeLabelDialog from "./lib/WorktreeLabelDialog.svelte";
   import SidebarRepoRow from "./lib/SidebarRepoRow.svelte";
   import InstanceSwitcher from "./lib/InstanceSwitcher.svelte";
@@ -22,7 +24,9 @@
     AvailableBranch,
     AppConfig,
     AppNotification,
+    CreateMainChatRequest,
     CreateWorktreeRequest,
+    TmuxLayoutSnapshot,
     DiffDialogProps,
     PrEntry,
     LinearIssueAvailability,
@@ -58,9 +62,13 @@
   import { setToastController } from "./lib/toast-context";
   import {
     api,
+    closeMainChat,
+    createMainChat,
     fetchWorktrees,
+    parseMainChatAgentId,
     postWorktreeToLinear,
     refreshWorktreeAgentTerminal,
+    removeMainChat,
     setWorktreeLabel,
     subscribeNotifications,
   } from "./lib/api";
@@ -104,6 +112,8 @@
   let labelError = $state("");
   let removingBranches = $state<Set<string>>(new Set());
   let showCreateDialog = $state(false);
+  let showNewMainChatDialog = $state(false);
+  let creatingMainChat = $state(false);
   let showSettingsDialog = $state(false);
   let ciDetailsPr = $state<PrEntry | null>(null);
   let commentReviewPr = $state<PrEntry | null>(null);
@@ -384,8 +394,12 @@
   let terminalRef:
     | {
         sendSelectPane: (pane: number) => void;
+        splitTmuxPane: (split: "right" | "bottom") => void;
+        createTmuxWindow: () => void;
+        selectTmuxWindow: (windowName: string) => void;
       }
     | undefined = $state();
+  let tmuxLayout = $state<TmuxLayoutSnapshot | null>(null);
 
   let openingBranches = $state<Set<string>>(new Set());
   let archivingBranches = $state<Set<string>>(new Set());
@@ -427,7 +441,17 @@
     labelBranch ? worktrees.find((w) => w.branch === labelBranch) : undefined,
   );
   let canConnect = $derived(!!selectedBranch && selectedWorktree?.mux === "✓" && !selectedWorktree?.creating);
-  let showWebChat = $derived(useWebChatUi && canConnect && supportsWorktreeChat(selectedWorktree));
+  let sessionViewMode = $state<"chat" | "terminal">("terminal");
+  let sessionViewModeBranch = $state<string | null>(null);
+  let supportsSelectedChat = $derived(supportsWorktreeChat(selectedWorktree));
+  let showSessionViewToggle = $derived(canConnect && supportsSelectedChat);
+  let showChatSurface = $derived(showSessionViewToggle && sessionViewMode === "chat");
+  let showTmuxManager = $derived(canConnect && !showChatSurface);
+  let existingMainChatAgentIds = $derived(
+    worktrees
+      .filter((worktree) => worktree.kind === "mainChat" && worktree.agentName)
+      .map((worktree) => worktree.agentName!),
+  );
   let isSelectedOpening = $derived(selectedBranch ? openingBranches.has(selectedBranch) : false);
   let isSelectedArchiving = $derived(selectedBranch ? archivingBranches.has(selectedBranch) : false);
   let isSelectedAgentTerminalRefreshing = $derived(
@@ -449,6 +473,27 @@
         ? "No active worktrees."
         : "No worktrees found.",
   );
+
+  $effect(() => {
+    selectedBranch;
+    tmuxLayout = null;
+  });
+
+  $effect(() => {
+    const branch = selectedBranch;
+    if (!branch) {
+      sessionViewModeBranch = null;
+      return;
+    }
+    const worktree = worktrees.find((candidate) => candidate.branch === branch);
+    if (!worktree || !supportsWorktreeChat(worktree)) {
+      sessionViewModeBranch = null;
+      return;
+    }
+    if (sessionViewModeBranch === branch) return;
+    sessionViewModeBranch = branch;
+    sessionViewMode = useWebChatUi || isMobile ? "chat" : "terminal";
+  });
 
   $effect(() => {
     const nextSelectedBranch = resolveSelectedBranch(
@@ -570,7 +615,7 @@
       label: String(i + 1),
     }));
   });
-  let showPaneBar = $derived(isMobile && canConnect && !showWebChat && paneBarPanes.length > 0);
+  let showPaneBar = $derived(isMobile && canConnect && !showChatSurface && paneBarPanes.length > 0);
 
   function refreshLinear(): void {
     const now = Date.now();
@@ -600,6 +645,21 @@
 
   function handleAssignIssue(issue: LinearIssue): void {
     openCreateDialog(issue);
+  }
+
+  async function handleCreateMainChat(request: CreateMainChatRequest) {
+    creatingMainChat = true;
+    try {
+      const response = await createMainChat(request);
+      showNewMainChatDialog = false;
+      selectedBranch = response.mainChat.id;
+      if (isMobile) sidebarOpen = false;
+      await refresh();
+    } catch (err) {
+      showToast({ tone: "error", message: `Failed to start chat: ${errorMessage(err)}` });
+    } finally {
+      creatingMainChat = false;
+    }
   }
 
   async function handleCreate(request: CreateWorktreeRequest) {
@@ -693,9 +753,14 @@
     selectNeighborOf(branch);
 
     removingBranches = new Set([...removingBranches, branch]);
+    const agentId = parseMainChatAgentId(branch);
     try {
-      await api.removeWorktree({ params: { name: branch } });
-      invalidateBranchCaches();
+      if (agentId) {
+        await removeMainChat(agentId);
+      } else {
+        await api.removeWorktree({ params: { name: branch } });
+        invalidateBranchCaches();
+      }
       await refresh();
     } catch (err) {
       showToast({ tone: "error", message: `Failed to remove: ${errorMessage(err)}` });
@@ -813,7 +878,7 @@
 
   async function openSelectedWorktree(): Promise<void> {
     const branch = selectedBranch;
-    if (!branch) return;
+    if (!branch || selectedWorktree?.kind === "mainChat") return;
     openingBranches = new Set([...openingBranches, branch]);
     try {
       await api.openWorktree({ params: { name: branch }, body: {} });
@@ -846,12 +911,20 @@
   }
 
   async function closeWorktree(branch: string): Promise<void> {
+    const agentId = parseMainChatAgentId(branch);
     selectNeighborOf(branch);
     try {
-      await api.closeWorktree({ params: { name: branch } });
+      if (agentId) {
+        await closeMainChat(agentId);
+      } else {
+        await api.closeWorktree({ params: { name: branch } });
+      }
       await refresh();
     } catch (err) {
-      showToast({ tone: "error", message: `Failed to close worktree: ${errorMessage(err)}` });
+      showToast({
+        tone: "error",
+        message: `Failed to close ${agentId ? "chat" : "worktree"}: ${errorMessage(err)}`,
+      });
     }
   }
 
@@ -939,7 +1012,15 @@
 
   function handleKeydown(e: KeyboardEvent) {
     // Ignore shortcuts when a dialog is open (let dialog handle its own keys)
-    if (showCreateDialog || removeBranch || mergeBranch || pullMainConfirm || pullLinkedRepoAlias || postToLinkedConfirm) return;
+    if (
+      showCreateDialog
+      || showNewMainChatDialog
+      || removeBranch
+      || mergeBranch
+      || pullMainConfirm
+      || pullLinkedRepoAlias
+      || postToLinkedConfirm
+    ) return;
 
     const mod = e.metaKey || e.ctrlKey;
     if (!mod) return;
@@ -955,7 +1036,7 @@
       openCreateDialog();
     } else if (e.key === "m" || e.key === "M") {
       e.preventDefault();
-      if (selectedBranch) mergeBranch = selectedBranch;
+      if (selectedBranch && selectedWorktree?.kind !== "mainChat") mergeBranch = selectedBranch;
     } else if (e.key === "d" || e.key === "D") {
       e.preventDefault();
       if (selectedBranch) removeBranch = selectedBranch;
@@ -970,6 +1051,11 @@
   function handlePaneSelect(pane: number) {
     activePane = pane;
     terminalRef?.sendSelectPane(pane);
+  }
+
+  function handleTmuxLayout(layout: TmuxLayoutSnapshot): void {
+    tmuxLayout = layout;
+    activePane = layout.activePane;
   }
 
   onMount(() => {
@@ -1084,6 +1170,11 @@
             <InstanceSwitcher selfName={config.name ?? "Dashboard"} />
           </div>
           <div class="flex items-center gap-2">
+            <button
+              class="h-8 px-2 gap-1.5 rounded-md border border-edge bg-surface text-accent text-xs flex items-center justify-center cursor-pointer hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed"
+              onclick={() => (showNewMainChatDialog = true)}
+              title="New Chat in project root"
+            ><span class="text-lg leading-none">+</span> Chat</button>
             <button
               class="h-8 px-2 gap-1.5 rounded-md border border-edge bg-surface text-accent text-xs flex items-center justify-center cursor-pointer hover:bg-hover disabled:opacity-50 disabled:cursor-not-allowed"
               onclick={() => openCreateDialog()}
@@ -1232,12 +1323,12 @@
       onclose={handleClose}
       onarchive={handleArchiveToggle}
       onmerge={() => {
-        if (selectedBranch) mergeBranch = selectedBranch;
+        if (selectedBranch && selectedWorktree?.kind !== "mainChat") mergeBranch = selectedBranch;
       }}
       onremove={() => {
         if (selectedBranch) removeBranch = selectedBranch;
       }}
-      oneditlabel={openLabelDialog}
+      oneditlabel={selectedWorktree?.kind === "mainChat" ? undefined : openLabelDialog}
       onsettings={() => (showSettingsDialog = true)}
       ondirtyclick={openDiffDialog}
       onCiClick={(pr) => (ciDetailsPr = pr)}
@@ -1247,7 +1338,26 @@
       archiving={isSelectedArchiving}
     />
 
-    {#if showWebChat}
+    {#if showSessionViewToggle}
+      <SessionViewToggle
+        mode={sessionViewMode}
+        onchange={(mode) => {
+          sessionViewMode = mode;
+        }}
+      />
+    {/if}
+
+    {#if showTmuxManager}
+      <TmuxManagerBar
+        layout={tmuxLayout}
+        onsplit={(split) => terminalRef?.splitTmuxPane(split)}
+        onnewwindow={() => terminalRef?.createTmuxWindow()}
+        onselectwindow={(windowName) => terminalRef?.selectTmuxWindow(windowName)}
+        onselectpane={handlePaneSelect}
+      />
+    {/if}
+
+    {#if showChatSurface}
       {#key selectedBranch}
         <MobileChatSurface
           worktree={selectedWorktree!}
@@ -1266,6 +1376,7 @@
           onrefreshagentterminal={() => {
             if (selectedBranch) void handleRefreshAgentTerminal(selectedBranch);
           }}
+          ontmuxlayout={handleTmuxLayout}
           bind:this={terminalRef}
         />
       {/key}
@@ -1280,6 +1391,26 @@
             {/if}
           </div>
           <p class="text-xs text-muted">{worktreeCreationPhaseLabel(selectedWorktree.creationPhase)}</p>
+        </div>
+      </div>
+    {:else if selectedWorktree?.kind === "mainChat"}
+      <div class="flex-1 flex items-center justify-center px-6">
+        <div class="flex flex-col items-center gap-4 text-center">
+          <div>
+            <p class="text-sm text-primary font-medium">{selectedWorktree.label ?? selectedWorktree.agentLabel}</p>
+            <p class="text-[10px] text-muted">Project root chat</p>
+          </div>
+          <p class="text-xs text-muted max-w-sm">
+            This chat session is closed. Remove it from the sidebar, then start a new chat for this agent.
+          </p>
+          <button
+            class="mt-2 px-5 py-2 rounded-md bg-danger/10 text-danger text-sm font-medium cursor-pointer border border-danger/30 hover:bg-danger/15"
+            onclick={() => {
+              if (selectedBranch) removeBranch = selectedBranch;
+            }}
+          >
+            Remove Chat
+          </button>
         </div>
       </div>
     {:else if selectedWorktree}
@@ -1321,12 +1452,20 @@
         <p>Select a worktree from the sidebar to connect</p>
       </div>
     {/if}
-
-    {#if showPaneBar}
-      <PaneBar {activePane} panes={paneBarPanes} onselect={handlePaneSelect} />
-    {/if}
   </main>
 </div>
+
+{#if showNewMainChatDialog}
+  <NewMainChatDialog
+    agents={config.agents}
+    defaultAgentId={config.defaultAgentId}
+    activeAgentIds={existingMainChatAgentIds}
+    oncreate={handleCreateMainChat}
+    oncancel={() => {
+      if (!creatingMainChat) showNewMainChatDialog = false;
+    }}
+  />
+{/if}
 
 {#if showCreateDialog}
   <CreateWorktreeDialog
@@ -1368,8 +1507,11 @@
 {/if}
 
 {#if removeBranch}
+  {@const removeAgentId = parseMainChatAgentId(removeBranch)}
   <ConfirmDialog
-    message={`Remove worktree "${removeBranch}"? This action cannot be undone.`}
+    message={removeAgentId
+      ? `Remove main chat for "${removeAgentId}"? This clears saved metadata.`
+      : `Remove worktree "${removeBranch}"? This action cannot be undone.`}
     onconfirm={handleRemove}
     oncancel={() => (removeBranch = null)}
   />

@@ -40,6 +40,7 @@ Usage:
   webmux send         Send a prompt to a running worktree agent
   webmux prune        Remove all worktrees in the current project
   webmux linear       Post a worktree conversation to a Linear issue/team
+  webmux chat         Manage project-root agent chats
   webmux completion   Generate shell completion script (bash, zsh)
 
 Options:
@@ -57,7 +58,7 @@ Environment:
 `);
 }
 
-type RootCommand = "serve" | "init" | "service" | "update" | "add" | "oneshot" | "list" | "open" | "close" | "refresh" | "archive" | "unarchive" | "label" | "remove" | "merge" | "send" | "prune" | "linear" | "completion" | null;
+type RootCommand = "serve" | "init" | "service" | "update" | "add" | "oneshot" | "list" | "open" | "close" | "refresh" | "archive" | "unarchive" | "label" | "remove" | "merge" | "send" | "prune" | "linear" | "chat" | "completion" | null;
 
 interface ParsedRootArgs {
   port: number;
@@ -91,6 +92,7 @@ function isRootCommand(value: string): value is NonNullable<RootCommand> {
     || value === "send"
     || value === "prune"
     || value === "linear"
+    || value === "chat"
     || value === "completion";
 }
 
@@ -364,6 +366,12 @@ async function main(args: string[] = process.argv.slice(2)): Promise<void> {
   if (parsed.command === "linear") {
     const { runLinearCommand } = await import("./linear-commands.ts");
     const exitCode = await runLinearCommand(parsed.commandArgs, parsed.port);
+    process.exit(exitCode);
+  }
+
+  if (parsed.command === "chat") {
+    const { runMainChatCommand } = await import("./main-chat-commands.ts");
+    const exitCode = await runMainChatCommand(parsed.commandArgs, parsed.port);
     process.exit(exitCode);
   }
 

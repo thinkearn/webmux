@@ -1,3 +1,4 @@
+import { readdirSync, rmSync, statSync } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
 import type {
@@ -13,7 +14,9 @@ import type {
   WorktreeMeta,
   WorktreeStoragePaths,
 } from "../domain/model";
-import { WORKTREE_ARCHIVE_STATE_VERSION } from "../domain/model";
+import type { MainChatMeta } from "../domain/main-chat";
+import { MAIN_CHAT_META_SCHEMA_VERSION } from "../domain/main-chat";
+import { WORKTREE_ARCHIVE_STATE_VERSION, WORKTREE_META_SCHEMA_VERSION } from "../domain/model";
 
 const SAFE_ENV_VALUE_RE = /^[A-Za-z0-9_./:@%+=,-]+$/;
 const DOTENV_LINE_RE = /^\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)/;
@@ -294,4 +297,141 @@ export async function readWorktreePrs(gitDir: string): Promise<PrEntry[]> {
 export async function writeWorktreePrs(gitDir: string, prs: PrEntry[]): Promise<void> {
   const { prsPath } = await ensureWorktreeStorageDirs(gitDir);
   await Bun.write(prsPath, JSON.stringify(prs, null, 2) + "\n");
+}
+
+export interface MainChatStoragePaths {
+  storageDir: string;
+  metaPath: string;
+  runtimeEnvPath: string;
+  controlEnvPath: string;
+}
+
+export function getMainChatStoragePaths(projectGitDir: string, agentId: string): MainChatStoragePaths {
+  const storageDir = join(projectGitDir, "webmux", "main-chats", agentId);
+  return {
+    storageDir,
+    metaPath: join(storageDir, "meta.json"),
+    runtimeEnvPath: join(storageDir, "runtime.env"),
+    controlEnvPath: join(storageDir, "control.env"),
+  };
+}
+
+export async function ensureMainChatStorageDirs(projectGitDir: string, agentId: string): Promise<MainChatStoragePaths> {
+  const paths = getMainChatStoragePaths(projectGitDir, agentId);
+  await mkdir(paths.storageDir, { recursive: true });
+  return paths;
+}
+
+function isMainChatMeta(raw: unknown): raw is MainChatMeta {
+  return isRecord(raw)
+    && typeof raw.schemaVersion === "number"
+    && typeof raw.chatId === "string"
+    && typeof raw.worktreeId === "string"
+    && typeof raw.agent === "string"
+    && typeof raw.profile === "string"
+    && typeof raw.runtime === "string"
+    && typeof raw.createdAt === "string"
+    && isRecord(raw.startupEnvValues)
+    && isRecord(raw.allocatedPorts);
+}
+
+function normalizeMainChatMeta(meta: MainChatMeta): MainChatMeta {
+  const conversation = normalizeConversationMeta(meta.conversation);
+  if (conversation === meta.conversation) return meta;
+  const rest: MainChatMeta = { ...meta };
+  delete rest.conversation;
+  return {
+    ...rest,
+    ...(conversation !== undefined ? { conversation } : {}),
+  };
+}
+
+export async function readMainChatMeta(projectGitDir: string, agentId: string): Promise<MainChatMeta | null> {
+  const { metaPath } = getMainChatStoragePaths(projectGitDir, agentId);
+  try {
+    const raw: unknown = await Bun.file(metaPath).json();
+    if (!isMainChatMeta(raw)) return null;
+    return normalizeMainChatMeta(raw);
+  } catch {
+    return null;
+  }
+}
+
+export async function writeMainChatMeta(projectGitDir: string, meta: MainChatMeta): Promise<void> {
+  const { metaPath } = await ensureMainChatStorageDirs(projectGitDir, meta.agent);
+  await Bun.write(metaPath, JSON.stringify(meta, null, 2) + "\n");
+}
+
+export async function removeMainChatStorage(projectGitDir: string, agentId: string): Promise<void> {
+  const { storageDir } = getMainChatStoragePaths(projectGitDir, agentId);
+  try {
+    rmSync(storageDir, { recursive: true, force: true });
+  } catch {
+    // best effort
+  }
+}
+
+export async function listMainChatAgentIds(projectGitDir: string): Promise<string[]> {
+  const root = join(projectGitDir, "webmux", "main-chats");
+  try {
+    return readdirSync(root)
+      .filter((entry) => {
+        try {
+          return statSync(join(root, entry)).isDirectory();
+        } catch {
+          return false;
+        }
+      })
+      .sort((left, right) => left.localeCompare(right));
+  } catch {
+    return [];
+  }
+}
+
+export async function writeMainChatRuntimeEnv(projectGitDir: string, agentId: string, env: Record<string, string>): Promise<void> {
+  const { runtimeEnvPath } = await ensureMainChatStorageDirs(projectGitDir, agentId);
+  await Bun.write(runtimeEnvPath, renderEnvFile(env));
+}
+
+export async function writeMainChatControlEnv(projectGitDir: string, agentId: string, env: ControlEnvMap): Promise<void> {
+  const { controlEnvPath } = await ensureMainChatStorageDirs(projectGitDir, agentId);
+  await Bun.write(controlEnvPath, renderEnvFile(env));
+}
+
+export function mainChatMetaAsWorktreeMeta(meta: MainChatMeta, branch: string): WorktreeMeta {
+  return {
+    schemaVersion: WORKTREE_META_SCHEMA_VERSION,
+    worktreeId: meta.worktreeId,
+    branch,
+    createdAt: meta.createdAt,
+    profile: meta.profile,
+    agent: meta.agent,
+    runtime: meta.runtime,
+    startupEnvValues: { ...meta.startupEnvValues },
+    allocatedPorts: { ...meta.allocatedPorts },
+    ...(meta.conversation !== undefined ? { conversation: meta.conversation } : {}),
+  };
+}
+
+export function buildMainChatMeta(input: {
+  chatId: string;
+  worktreeId: string;
+  agent: MainChatMeta["agent"];
+  profile: string;
+  runtime: MainChatMeta["runtime"];
+  startupEnvValues?: Record<string, string>;
+  allocatedPorts?: Record<string, number>;
+  now?: () => Date;
+}): MainChatMeta {
+  return {
+    schemaVersion: MAIN_CHAT_META_SCHEMA_VERSION,
+    chatId: input.chatId,
+    worktreeId: input.worktreeId,
+    agent: input.agent,
+    profile: input.profile,
+    runtime: input.runtime,
+    createdAt: (input.now ?? (() => new Date()))().toISOString(),
+    startupEnvValues: { ...(input.startupEnvValues ?? {}) },
+    allocatedPorts: { ...(input.allocatedPorts ?? {}) },
+  };
 }

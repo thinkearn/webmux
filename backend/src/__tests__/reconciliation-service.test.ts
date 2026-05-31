@@ -142,6 +142,18 @@ class FakeTmuxGateway implements TmuxGateway {
     throw new Error("not implemented");
   }
 
+  selectWindow(): void {
+    throw new Error("not implemented");
+  }
+
+  listPanes(): number[] {
+    return [0];
+  }
+
+  displayMessage(): string {
+    return "0";
+  }
+
   listWindows(): TmuxWindowSummary[] {
     return this.windows;
   }
