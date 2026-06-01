@@ -61,6 +61,7 @@
   let isUploading = $state(false);
   let isDraggingOver = $state(false);
   let dragCounter = 0;
+  let fileInput: HTMLInputElement | null = $state(null);
 
   async function uploadAndAppendPaths(files: File[]): Promise<void> {
     try {
@@ -131,6 +132,15 @@
     if (files.length === 0) return;
 
     await uploadAndAppendPaths(files);
+  }
+
+  function handleFileInputChange(e: Event): void {
+    const target = e.currentTarget;
+    if (!(target instanceof HTMLInputElement)) return;
+    const files = Array.from(target.files ?? []).filter((f) => f.type.startsWith("image/"));
+    target.value = "";
+    if (files.length === 0) return;
+    void uploadAndAppendPaths(files);
   }
 
   function handleComposerInput(event: Event): void {
@@ -422,7 +432,7 @@
         <textarea
           id="conversation-composer"
           aria-label="Message"
-          class="block min-h-[5.25rem] w-full max-w-full resize-none rounded-2xl border border-edge bg-surface py-3 pl-4 pr-14 text-sm text-primary outline-none transition placeholder:text-muted/70 focus:border-accent {isDraggingOver ? 'ring-1 ring-accent/30' : ''}"
+          class="block min-h-[5.25rem] w-full max-w-full resize-none rounded-2xl border border-edge bg-surface py-3 pl-4 pb-10 pr-14 text-sm text-primary outline-none transition placeholder:text-muted/70 focus:border-accent {isDraggingOver ? 'ring-1 ring-accent/30' : ''}"
           placeholder="ask anything"
           value={composerText}
           oninput={handleComposerInput}
@@ -445,6 +455,23 @@
           </div>
         {/if}
 
+        <input
+          bind:this={fileInput}
+          type="file"
+          accept="image/png,image/jpeg,image/gif,image/webp"
+          multiple
+          class="hidden"
+          onchange={handleFileInputChange}
+        />
+        <button
+          type="button"
+          aria-label="Upload image"
+          class="absolute left-3 bottom-3 flex size-7 items-center justify-center rounded-md text-muted transition enabled:hover:bg-hover enabled:hover:text-primary disabled:cursor-not-allowed disabled:opacity-45"
+          onclick={() => fileInput?.click()}
+          disabled={isSending || isUploading}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+        </button>
         {#if showComposerInterrupt}
           <button
             type="button"

@@ -141,6 +141,7 @@
   let isUploading = $state(false);
   let isDraggingOver = $state(false);
   let dragCounter = 0;
+  let fileInput: HTMLInputElement | null = $state(null);
 
   let showLinearTicketOption = $derived(
     linearCreateTicketOption && !openedFromLinearIssue && mode === "new",
@@ -306,6 +307,15 @@
 
     await uploadAndAppendPaths(files);
   }
+
+  function handleFileInputChange(e: Event): void {
+    const target = e.currentTarget;
+    if (!(target instanceof HTMLInputElement)) return;
+    const files = Array.from(target.files ?? []).filter((f) => f.type.startsWith("image/"));
+    target.value = "";
+    if (files.length === 0) return;
+    void uploadAndAppendPaths(files);
+  }
 </script>
 
 <BaseDialog onclose={oncancel} className="md:max-w-[440px]">
@@ -360,7 +370,7 @@
           id="wt-prompt"
           rows="4"
           use:focus
-          class="w-full px-2.5 py-1.5 rounded-md border border-edge bg-surface text-primary text-[13px] placeholder:text-muted/50 outline-none focus:border-accent resize-y {isDraggingOver ? 'border-accent ring-1 ring-accent/30' : ''}"
+          class="w-full px-2.5 py-1.5 pb-8 rounded-md border border-edge bg-surface text-primary text-[13px] placeholder:text-muted/50 outline-none focus:border-accent resize-y {isDraggingOver ? 'border-accent ring-1 ring-accent/30' : ''}"
           placeholder={createLinearTicket
             ? "Describe the task for the agent. This will also be used as the Linear ticket description..."
             : "Describe the task for the agent..."}
@@ -388,6 +398,23 @@
             <span class="text-xs text-muted">Uploading...</span>
           </div>
         {/if}
+        <input
+          bind:this={fileInput}
+          type="file"
+          accept="image/png,image/jpeg,image/gif,image/webp"
+          multiple
+          class="hidden"
+          onchange={handleFileInputChange}
+        />
+        <button
+          type="button"
+          aria-label="Upload image"
+          class="absolute right-2 bottom-1.5 flex size-6 items-center justify-center rounded text-muted transition hover:bg-hover hover:text-primary disabled:cursor-not-allowed disabled:opacity-45"
+          onclick={() => fileInput?.click()}
+          disabled={isUploading}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+        </button>
       </div>
     </div>
     <div class="mb-4">
