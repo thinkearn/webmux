@@ -14,6 +14,7 @@
   import Btn from "./Btn.svelte";
   import StartupEnvFields from "./StartupEnvFields.svelte";
   import Toggle from "./Toggle.svelte";
+  import { uploadStagingFiles } from "./api";
 
   let {
     profiles = [],
@@ -137,6 +138,10 @@
   let saveDefault = $state(hasSavedDefaults);
   // svelte-ignore state_referenced_locally
   let envValues = $state<Record<string, string | boolean>>(loadSavedEnvs());
+  let isUploading = $state(false);
+  let isDraggingOver = $state(false);
+  let dragCounter = 0;
+  let fileInput: HTMLInputElement | null = $state(null);
 
   let showLinearTicketOption = $derived(
     linearCreateTicketOption && !openedFromLinearIssue && mode === "new",
@@ -231,6 +236,86 @@
   function switchToNewBranchMode(): void {
     mode = "new";
   }
+
+  async function handlePromptPaste(e: ClipboardEvent): Promise<void> {
+    const clipboard = e.clipboardData;
+    if (!clipboard) return;
+
+    const imageFiles: File[] = [];
+    for (const item of clipboard.items) {
+      if (item.kind === "file" && item.type.startsWith("image/")) {
+        const file = item.getAsFile();
+        if (file) imageFiles.push(file);
+      }
+    }
+    if (imageFiles.length === 0) return;
+
+    e.preventDefault();
+    await uploadAndAppendPaths(imageFiles);
+  }
+
+  async function uploadAndAppendPaths(files: File[]): Promise<void> {
+    try {
+      isUploading = true;
+      const result = await uploadStagingFiles(files);
+      const paths = result.files.map((f) => f.path).join(" ");
+      if (paths) {
+        prompt = prompt ? `${prompt}\n${paths}` : paths;
+      }
+    } catch {
+      /* ignore upload errors in dialog */
+    } finally {
+      isUploading = false;
+    }
+  }
+
+  function handlePromptDragEnter(e: DragEvent): void {
+    e.preventDefault();
+    const dt = e.dataTransfer;
+    if (!dt) return;
+    const hasImages = Array.from(dt.items).some(
+      (item) => item.kind === "file" && item.type.startsWith("image/"),
+    );
+    if (hasImages) {
+      dragCounter++;
+      isDraggingOver = true;
+    }
+  }
+
+  function handlePromptDragOver(e: DragEvent): void {
+    e.preventDefault();
+  }
+
+  function handlePromptDragLeave(): void {
+    dragCounter--;
+    if (dragCounter <= 0) {
+      dragCounter = 0;
+      isDraggingOver = false;
+    }
+  }
+
+  async function handlePromptDrop(e: DragEvent): Promise<void> {
+    e.preventDefault();
+    dragCounter = 0;
+    isDraggingOver = false;
+
+    const dt = e.dataTransfer;
+    if (!dt) return;
+
+    const files = Array.from(dt.files).filter((f) => f.type.startsWith("image/"));
+    if (files.length === 0) return;
+
+    await uploadAndAppendPaths(files);
+  }
+
+  function handleFileInputChange(e: Event): void {
+    const target = e.currentTarget;
+    if (!(target instanceof HTMLInputElement)) return;
+    const files = Array.from(target.files ?? []).filter((f) => f.type.startsWith("image/"));
+    target.value = "";
+    if (files.length === 0) return;
+    void uploadAndAppendPaths(files);
+  }
 </script>
 
 <BaseDialog onclose={oncancel} className="md:max-w-[440px]">
@@ -280,22 +365,57 @@
       <label class="block text-xs text-muted mb-1.5" for="wt-prompt"
         >Prompt <span class="opacity-60">({promptRequired ? "required" : "optional"})</span></label
       >
-      <textarea
-        id="wt-prompt"
-        rows="4"
-        use:focus
-        class="w-full px-2.5 py-1.5 rounded-md border border-edge bg-surface text-primary text-[13px] placeholder:text-muted/50 outline-none focus:border-accent resize-y"
-        placeholder={createLinearTicket
-          ? "Describe the task for the agent. This will also be used as the Linear ticket description..."
-          : "Describe the task for the agent..."}
-        bind:value={prompt}
-        onkeydown={(e) => {
-          if (e.key === "Enter" && !e.shiftKey) {
-            e.preventDefault();
-            e.currentTarget.form?.requestSubmit();
-          }
-        }}
-      ></textarea>
+      <div class="relative">
+        <textarea
+          id="wt-prompt"
+          rows="4"
+          use:focus
+          class="w-full px-2.5 py-1.5 pb-8 rounded-md border border-edge bg-surface text-primary text-[13px] placeholder:text-muted/50 outline-none focus:border-accent resize-y {isDraggingOver ? 'border-accent ring-1 ring-accent/30' : ''}"
+          placeholder={createLinearTicket
+            ? "Describe the task for the agent. This will also be used as the Linear ticket description..."
+            : "Describe the task for the agent..."}
+          bind:value={prompt}
+          disabled={isUploading}
+          onpaste={handlePromptPaste}
+          ondragenter={handlePromptDragEnter}
+          ondragover={handlePromptDragOver}
+          ondragleave={handlePromptDragLeave}
+          ondrop={handlePromptDrop}
+          onkeydown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              e.currentTarget.form?.requestSubmit();
+            }
+          }}
+        ></textarea>
+        {#if isDraggingOver}
+          <div class="absolute inset-0 flex items-center justify-center rounded-md bg-surface/80 pointer-events-none">
+            <span class="text-xs text-muted">Drop image(s) to upload</span>
+          </div>
+        {/if}
+        {#if isUploading}
+          <div class="absolute inset-0 flex items-center justify-center rounded-md bg-surface/80 pointer-events-none">
+            <span class="text-xs text-muted">Uploading...</span>
+          </div>
+        {/if}
+        <input
+          bind:this={fileInput}
+          type="file"
+          accept="image/png,image/jpeg,image/gif,image/webp"
+          multiple
+          class="hidden"
+          onchange={handleFileInputChange}
+        />
+        <button
+          type="button"
+          aria-label="Upload image"
+          class="absolute right-2 bottom-1.5 flex size-6 items-center justify-center rounded text-muted transition hover:bg-hover hover:text-primary disabled:cursor-not-allowed disabled:opacity-45"
+          onclick={() => fileInput?.click()}
+          disabled={isUploading}
+        >
+          <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/></svg>
+        </button>
+      </div>
     </div>
     <div class="mb-4">
       {#if mode === "new"}

@@ -349,3 +349,17 @@ export async function uploadFiles(worktree: string, files: File[]): Promise<File
   if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
   return data as FileUploadResult;
 }
+
+export async function uploadStagingFiles(files: File[]): Promise<FileUploadResult> {
+  const form = new FormData();
+  for (const file of files) {
+    form.append("files", file);
+  }
+  const res = await fetch("/api/uploads", {
+    method: "POST",
+    body: form,
+  });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || `HTTP ${res.status}`);
+  return data as FileUploadResult;
+}

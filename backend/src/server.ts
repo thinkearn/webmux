@@ -1863,11 +1863,10 @@ function sanitizeFilename(name: string): string {
   return base.replace(/[^a-zA-Z0-9._-]/g, "_") || "upload";
 }
 
-async function apiUploadFiles(name: string, req: Request): Promise<Response> {
-  const state = projectRuntime.getWorktreeByBranch(name);
-  if (!state) return errorResponse(`Worktree not found: ${name}`, 404);
-  await disarmOneshotIfArmed(name, "upload-files");
-
+async function writeUploadedFiles(
+  req: Request,
+  uploadDir: string,
+): Promise<Response | { files: Array<{ path: string }> }> {
   let formData: FormData;
   try {
     formData = await req.formData();
@@ -1878,7 +1877,6 @@ async function apiUploadFiles(name: string, req: Request): Promise<Response> {
   const entries = formData.getAll("files");
   if (entries.length === 0) return errorResponse("No files provided", 400);
 
-  const uploadDir = `/tmp/webmux-uploads/${sanitizeFilename(name)}`;
   mkdirSync(uploadDir, { recursive: true });
 
   const results: Array<{ path: string }> = [];
@@ -1899,8 +1897,30 @@ async function apiUploadFiles(name: string, req: Request): Promise<Response> {
     results.push({ path: destPath });
   }
 
-  log.info(`[upload] branch=${name} files=${results.length}`);
-  return jsonResponse({ files: results });
+  return { files: results };
+}
+
+async function apiUploadFiles(name: string, req: Request): Promise<Response> {
+  const state = projectRuntime.getWorktreeByBranch(name);
+  if (!state) return errorResponse(`Worktree not found: ${name}`, 404);
+  await disarmOneshotIfArmed(name, "upload-files");
+
+  const uploadDir = `/tmp/webmux-uploads/${sanitizeFilename(name)}`;
+  const result = await writeUploadedFiles(req, uploadDir);
+  if ("ok" in result) return result as Response;
+
+  log.info(`[upload] branch=${name} files=${result.files.length}`);
+  return jsonResponse(result);
+}
+
+async function apiUploadStagingFiles(req: Request): Promise<Response> {
+  const stagingId = randomUUID();
+  const uploadDir = `/tmp/webmux-uploads/_staging/${stagingId}`;
+  const result = await writeUploadedFiles(req, uploadDir);
+  if ("ok" in result) return result as Response;
+
+  log.info(`[upload-staging] stagingId=${stagingId} files=${result.files.length}`);
+  return jsonResponse(result);
 }
 
 function parseWorktreeNameParam(params: Record<string, string>):
@@ -2259,6 +2279,12 @@ function startServer(port: number): ReturnType<typeof Bun.serve> {
         if (!parsed.ok) return parsed.response;
         const name = parsed.data;
         return catching(`POST /api/worktrees/${name}/upload`, () => apiUploadFiles(name, req));
+      },
+    },
+
+    "/api/uploads": {
+      POST: (req) => {
+        return catching("POST /api/uploads", () => apiUploadStagingFiles(req));
       },
     },
 
