@@ -18,6 +18,11 @@ export interface ClaudeCliConversationMessage {
   cwd?: string;
 }
 
+export interface PendingToolUse {
+  name: string;
+  input: Record<string, unknown>;
+}
+
 export interface ClaudeCliSession {
   sessionId: string;
   cwd: string;
@@ -26,6 +31,7 @@ export interface ClaudeCliSession {
   createdAt: string | null;
   lastSeenAt: string | null;
   messages: ClaudeCliConversationMessage[];
+  pendingToolUse?: PendingToolUse;
 }
 
 export interface ClaudeCliSessionSummary {
@@ -263,6 +269,36 @@ function parseClaudeSessionRecords(text: string): ClaudeStoredRecord[] {
       }
     });
 }
+function detectPendingToolUse(
+  records: ClaudeStoredRecord[],
+  lastAssistantIndex: number,
+): PendingToolUse | null {
+  if (lastAssistantIndex < 0 || lastAssistantIndex >= records.length) return null;
+
+  const lastAssistant = records[lastAssistantIndex];
+  if (!isRecord(lastAssistant.message) || lastAssistant.message.stop_reason !== "tool_use") return null;
+
+  // Check that no user record follows the last assistant record.
+  for (let i = lastAssistantIndex + 1; i < records.length; i++) {
+    if (records[i].type === "user") return null;
+  }
+
+  const content = lastAssistant.message.content;
+  if (!Array.isArray(content)) return null;
+
+  // Find the last tool_use block (the one that triggered the stop).
+  let lastToolBlock: Record<string, unknown> | null = null;
+  for (const block of content) {
+    if (isRecord(block) && block.type === "tool_use") {
+      lastToolBlock = block;
+    }
+  }
+  if (!lastToolBlock) return null;
+
+  const name = typeof lastToolBlock.name === "string" ? lastToolBlock.name : "tool";
+  const input = isRecord(lastToolBlock.input) ? lastToolBlock.input as Record<string, unknown> : {};
+  return { name, input };
+}
 
 export function buildClaudeSessionFromText(
   input: {
@@ -279,6 +315,8 @@ export function buildClaudeSessionFromText(
   let lastSeenAt: string | null = null;
   let currentTurnId: string | null = null;
   let blockIndex = 0;
+  let lastAssistantIndex = -1;
+  let recordIndex = -1;
 
   const pushMessage = (message: ClaudeCliConversationMessage): void => {
     messages.push(message);
@@ -286,6 +324,7 @@ export function buildClaudeSessionFromText(
   };
 
   for (const record of records) {
+    recordIndex++;
     cwd ??= readString(record.cwd);
     gitBranch ??= readString(record.gitBranch);
     const timestamp = readTimestamp(record.timestamp);
@@ -359,6 +398,7 @@ export function buildClaudeSessionFromText(
 
     if (!isClaudeAssistantRecord(record)) continue;
     if (!Array.isArray(record.message.content)) continue;
+    lastAssistantIndex = recordIndex;
 
     for (const block of record.message.content) {
       if (!isRecord(block)) continue;
@@ -412,6 +452,8 @@ export function buildClaudeSessionFromText(
     }
   }
 
+  const pendingToolUse = detectPendingToolUse(records, lastAssistantIndex);
+
   return {
     sessionId: input.sessionId,
     cwd: cwd ?? "",
@@ -420,6 +462,7 @@ export function buildClaudeSessionFromText(
     createdAt,
     lastSeenAt,
     messages,
+    ...(pendingToolUse ? { pendingToolUse } : {}),
   };
 }
 
