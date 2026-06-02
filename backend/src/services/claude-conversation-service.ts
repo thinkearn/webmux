@@ -2,8 +2,9 @@ import { readWorktreeMeta, writeWorktreeMeta } from "../adapters/fs";
 import type {
   ClaudeCliConversationMessage,
   ClaudeCliGateway,
-  type ClaudeCliOptions,
+  ClaudeCliOptions,
   ClaudeCliSession,
+  PendingToolUse,
 } from "../adapters/claude-cli";
 import type {
   AgentsUiConversationMessage,
@@ -11,6 +12,7 @@ import type {
   AgentsUiWorktreeConversationResponse,
 } from "../domain/agents-ui";
 import type {
+  AgentApprovalPrompt,
   ClaudeWorktreeConversationMeta,
   WorktreeConversationMeta,
   WorktreeMeta,
@@ -68,17 +70,42 @@ function normalizeSessionMessages(messages: ClaudeCliConversationMessage[]): Age
   }));
 }
 
+function extractPendingToolMessage(pending: PendingToolUse): string {
+  if (pending.name === "AskUserQuestion") {
+    const questions = pending.input.questions;
+    if (Array.isArray(questions) && questions.length > 0) {
+      const first = questions[0];
+      if (typeof first === "object" && first !== null && typeof first.question === "string") {
+        return first.question;
+      }
+    }
+  }
+  return `Agent is waiting for input (${pending.name}).`;
+}
+
+function buildApprovalPromptFromPendingTool(pending: PendingToolUse): AgentApprovalPrompt {
+  return {
+    id: `pending-tool:${pending.name}`,
+    kind: "unknown",
+    title: "Agent is waiting",
+    message: extractPendingToolMessage(pending),
+    createdAt: new Date().toISOString(),
+  };
+}
+
 function buildConversationState(
   worktree: WorktreeSnapshot,
   session: ClaudeCliSession | null,
 ): AgentsUiConversationState {
+  const approvalPrompt = worktree.approvalPrompt
+    ?? (session?.pendingToolUse ? buildApprovalPromptFromPendingTool(session.pendingToolUse) : null);
   return {
     provider: "claudeCode",
     conversationId: session?.sessionId ?? buildPendingConversationId(worktree),
     cwd: worktree.path,
     running: false,
     activeTurnId: null,
-    approvalPrompt: worktree.approvalPrompt,
+    approvalPrompt,
     messages: normalizeSessionMessages(session?.messages ?? []),
   };
 }
