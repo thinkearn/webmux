@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { PrEntry, ServiceStatus } from "./types";
   import CursorButton from "./CursorButton.svelte";
+  import VscodeButton from "./VscodeButton.svelte";
   import PrStatusGroup from "./PrStatusGroup.svelte";
 
   let {
@@ -8,6 +9,7 @@
     prs,
     services = [],
     cursorUrl = null,
+    vscodeUrl = null,
     onCiClick,
     onReviewsClick,
   }: {
@@ -15,6 +17,7 @@
     prs: PrEntry[];
     services?: ServiceStatus[];
     cursorUrl?: string | null;
+    vscodeUrl?: string | null;
     onCiClick: (pr: PrEntry) => void;
     onReviewsClick: (pr: PrEntry) => void;
   } = $props();
@@ -41,5 +44,8 @@
   {/each}
   {#if cursorUrl}
     <CursorButton url={cursorUrl} />
+  {/if}
+  {#if vscodeUrl}
+    <VscodeButton url={vscodeUrl} />
   {/if}
 </div>
