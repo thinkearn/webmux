@@ -57,6 +57,12 @@ export function makeCursorUrl(dir: string | null | undefined, sshHost: string | 
   return `cursor://file${dir}`;
 }
 
+export function makeVscodeUrl(dir: string | null | undefined, sshHost: string | null): string | null {
+  if (!dir) return null;
+  if (sshHost) return `vscode://vscode-remote/ssh-remote+${sshHost}${dir}`;
+  return `vscode://file${dir}`;
+}
+
 export function errorMessage(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }

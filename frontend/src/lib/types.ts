@@ -87,6 +87,7 @@ export interface FileUploadResult {
 export interface DiffDialogProps {
   branch: string;
   cursorUrl?: string | null;
+  vscodeUrl?: string | null;
   onclose: () => void;
 }
 

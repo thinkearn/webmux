@@ -42,6 +42,7 @@ describe("DiffDialog", () => {
       props: {
         branch: "feature/status",
         cursorUrl: "cursor://file/tmp/feature/status",
+        vscodeUrl: "vscode://file/tmp/feature/status",
         onclose: vi.fn(),
       },
     });
@@ -56,6 +57,10 @@ describe("DiffDialog", () => {
     expect(screen.getByRole("link", { name: "Cursor" })).toHaveAttribute(
       "href",
       "cursor://file/tmp/feature/status",
+    );
+    expect(screen.getByRole("link", { name: "VS Code" })).toHaveAttribute(
+      "href",
+      "vscode://file/tmp/feature/status",
     );
   });
 

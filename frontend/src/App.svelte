@@ -39,6 +39,7 @@
   import {
     SSH_STORAGE_KEY,
     makeCursorUrl,
+    makeVscodeUrl,
     errorMessage,
     worktreeCreationPhaseLabel,
     loadSavedTheme,
@@ -1255,6 +1256,7 @@
         <SidebarRepoRow
           label={config.mainBranch ?? "main"}
           cursorUrl={makeCursorUrl(config.projectDir, sshHost) ?? ""}
+          vscodeUrl={makeVscodeUrl(config.projectDir, sshHost)}
           onpull={() => { pullMainConfirm = true; pullMainForce = false; pullMainError = ""; }}
         />
       {/if}
@@ -1262,6 +1264,7 @@
         <SidebarRepoRow
           label={lr.alias}
           cursorUrl={makeCursorUrl(lr.dir, sshHost) ?? ""}
+          vscodeUrl={makeVscodeUrl(lr.dir, sshHost)}
           onpull={() => { pullLinkedRepoAlias = lr.alias; pullLinkedRepoForce = false; pullLinkedRepoError = ""; }}
         />
       {/each}
@@ -1603,6 +1606,7 @@
   <DiffDialogComponent
     branch={selectedBranch}
     cursorUrl={makeCursorUrl(selectedWorktree?.dir, sshHost)}
+    vscodeUrl={makeVscodeUrl(selectedWorktree?.dir, sshHost)}
     onclose={() => (showDiffDialog = false)}
   />
 {/if}

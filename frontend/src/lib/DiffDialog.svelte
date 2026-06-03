@@ -8,10 +8,12 @@
   import BaseDialog from "./BaseDialog.svelte";
   import Btn from "./Btn.svelte";
   import CursorButton from "./CursorButton.svelte";
+  import VscodeButton from "./VscodeButton.svelte";
 
   let {
     branch,
     cursorUrl = null,
+    vscodeUrl = null,
     onclose,
   }: DiffDialogProps = $props();
 
@@ -71,6 +73,9 @@
     <h2 class="text-base">Changes &mdash; <span class="font-mono text-sm">{branch}</span></h2>
     {#if cursorUrl}
       <CursorButton url={cursorUrl} />
+    {/if}
+    {#if vscodeUrl}
+      <VscodeButton url={vscodeUrl} />
     {/if}
   </div>
 
